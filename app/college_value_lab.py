@@ -594,10 +594,10 @@ def set_profile_preset(
 
 
 TOOLTIPS = {
-    "colleges": "Number of college cost scenarios currently shown after sidebar filters. Public colleges can appear twice: in-state and out-of-state.",
+    "colleges": "Number of college cost scenarios currently shown after sidebar filters. If you entered a home state, public colleges show the realistic residency for you: in-state in your state and out-of-state elsewhere.",
     "cost_before_aid": "Estimated yearly cost before financial aid and scholarships. This is an annual amount, not a four-year total. For out-of-state public colleges, this adds the out-of-state tuition difference.",
     "cost_after_aid": "Estimated yearly cost after grants and scholarships. This is an annual amount, not a four-year total. If you choose an income range, this uses Scorecard net price by income when available. If you choose no need-based aid expected, it uses full annual cost.",
-    "residency": "Cost scenario used for the row: in-state, out-of-state, or all students when tuition does not differ by residency.",
+    "residency": "Cost scenario used for the row. If you entered a home state, public colleges use in-state only for that state and out-of-state for other states. If no home state is entered, both scenarios are shown.",
     "graduation_rate": "College Scorecard graduation rate, generally completion within 150% of expected time. For bachelor's schools, that usually means within six years.",
     "on_time_completion_rate": "Completion within 100% of expected time. For bachelor's schools, that usually means within four years.",
     "median_debt": "Median federal student loan debt among students who completed at that college.",
@@ -1008,10 +1008,15 @@ def build_cost_scenarios(data, profile=None):
             else:
                 in_state_after_aid = base_net_price
                 out_state_after_aid = base_net_price + tuition_gap if pd.notna(base_net_price) else None
-            scenario_specs = [
-                ("In-state", row["annual_cost"], in_state_after_aid),
-                ("Out-of-state", row["annual_cost"] + tuition_gap, out_state_after_aid),
-            ]
+            if profile["home_state"] == "Prefer not to say":
+                scenario_specs = [
+                    ("In-state", row["annual_cost"], in_state_after_aid),
+                    ("Out-of-state", row["annual_cost"] + tuition_gap, out_state_after_aid),
+                ]
+            elif row["state"] == profile["home_state"]:
+                scenario_specs = [("In-state", row["annual_cost"], in_state_after_aid)]
+            else:
+                scenario_specs = [("Out-of-state", row["annual_cost"] + tuition_gap, out_state_after_aid)]
         else:
             scenario_specs = [("All students", row["annual_cost"], base_net_price)]
 
@@ -2218,8 +2223,9 @@ def show_methodology_page():
         "Estimated cost after aid uses College Scorecard net price by family-income bracket when the user selects an income range "
         "and the school reports that field. If the user selects the no-need-aid option, the app uses full annual cost because "
         "some families will not receive need-based aid at expensive private colleges. Otherwise, it falls back to average net price. "
-        "Public colleges can appear as separate in-state and out-of-state scenarios. Because Scorecard does not provide perfect after-aid net price by residency, "
-        "the out-of-state after-aid estimate adds the tuition difference to the estimated net price."
+        "If the user enters a home state, public colleges show the realistic residency scenario for that user: in-state for colleges in that state "
+        "and out-of-state for public colleges elsewhere. If no home state is entered, the app shows both in-state and out-of-state scenarios. "
+        "Because Scorecard does not provide perfect after-aid net price by residency, the out-of-state after-aid estimate adds the tuition difference to the estimated net price."
     )
 
     st.markdown("##### Net price calculator companion")
@@ -2812,9 +2818,14 @@ scenario_df = build_cost_scenarios(df, profile_settings)
 
 with st.sidebar:
     st.header("College Filters")
-    st.caption(
-        "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate."
-    )
+    if profile_settings["home_state"] == "Prefer not to say":
+        st.caption(
+            "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate. Add a home state in Personal Profile to remove duplicate public in-state/out-of-state rows."
+        )
+    else:
+        st.caption(
+            f"Using {profile_settings['home_state']} as your home state: public colleges in {profile_settings['home_state']} show in-state cost; public colleges elsewhere show out-of-state cost."
+        )
     scenario_df = add_need_value_score(scenario_df, profile_settings)
     scenario_df = add_program_focus(scenario_df, programs_updated_at, profile_settings)
     scenario_df = add_estimate_confidence(scenario_df, profile_settings)
@@ -2849,13 +2860,15 @@ with st.sidebar:
         if st.checkbox(ownership, value=True, key=f"ownership_{ownership}")
     ]
 
-    st.caption("Residency")
-    residencies = sorted(scenario_df["residency"].dropna().unique())
-    selected_residencies = [
-        residency
-        for residency in residencies
-        if st.checkbox(residency, value=True, key=f"residency_{residency}")
-    ]
+    selected_residencies = []
+    if profile_settings["home_state"] == "Prefer not to say":
+        st.caption("Residency")
+        residencies = sorted(scenario_df["residency"].dropna().unique())
+        selected_residencies = [
+            residency
+            for residency in residencies
+            if st.checkbox(residency, value=True, key=f"residency_{residency}")
+        ]
 
     student_min = int(scenario_df["student_size"].dropna().min())
     student_max = int(scenario_df["student_size"].dropna().max())
