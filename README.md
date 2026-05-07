@@ -1,0 +1,132 @@
+# College Value Lab
+
+College Value Lab is a public-data college affordability planner. It helps students compare whether colleges are financially realistic, risky, or worth stretching for by combining estimated cost after aid, budget gap, student debt, graduation outcomes, and post-college earnings.
+
+## Data Source
+
+The dataset comes from the U.S. Department of Education College Scorecard API:
+
+https://collegescorecard.ed.gov/data/api/
+
+The starter script uses the public `DEMO_KEY`. For a larger or production version, request a free API key and run:
+
+```bash
+export COLLEGE_SCORECARD_API_KEY="your_key_here"
+python3 scripts/fetch_college_scorecard.py
+```
+
+## Start Here
+
+1. Create a virtual environment.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. Fetch and clean the data.
+
+```bash
+python3 scripts/fetch_college_scorecard.py
+```
+
+If you hit the public demo-key rate limit, clean the cached raw records:
+
+```bash
+python3 scripts/clean_college_scorecard.py
+```
+
+Optional: fetch field-of-study/program outcomes. This adds major-level earnings and debt to the app when a user enters an Academic focus.
+
+```bash
+python3 scripts/fetch_college_programs.py
+```
+
+With the public `DEMO_KEY`, this script only pulls a starter sample. With your own API key, it can pull much more:
+
+```bash
+export COLLEGE_SCORECARD_API_KEY="your_key_here"
+PROGRAM_MAX_PAGES=80 python3 scripts/fetch_college_programs.py
+```
+
+Optional: backfill official net price calculator links from College Scorecard.
+
+```bash
+python3 scripts/fetch_net_price_calculator_urls.py
+```
+
+3. Run the dashboard.
+
+```bash
+streamlit run app/college_value_lab.py
+```
+
+## Need Value Score
+
+The app first estimates yearly cost after aid. If a user enters a family income range, the app uses College Scorecard net price by income bracket when available; otherwise it falls back to average net price. Public colleges may appear as separate in-state and out-of-state scenarios.
+
+Need Value Score combines five components:
+
+- Current affordability: estimated cost after aid, budget fit, and debt pressure.
+- Future ROI / earnings: 10-year earnings, earnings after graduation, ROI ratio, and graduation rate.
+- Debt safety.
+- Graduation confidence.
+- Home-state fit.
+
+The Personal Profile page lets users adjust how much each component matters. This makes the score useful for different situations: one student may need current affordability above all else, while another may care more about long-term payoff. This is an exploratory planning score, not a financial-aid estimator or a guarantee of individual outcomes.
+
+The raw future ROI ratio is:
+
+```text
+(10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate
+```
+
+The app displays this as ROI Score, a 0-100 percentile rank that is easier to interpret:
+
+- 85-100: excellent.
+- 70-84: strong.
+- 50-69: above average.
+- 30-49: below average.
+- 0-29: weak.
+
+Graduation rate uses College Scorecard's 150%-of-expected-time completion measure. For bachelor's institutions, that generally means completion within six years. On-time completion is tracked separately with the 100%-of-expected-time field, which generally means four years for bachelor's institutions.
+
+## Decision Signals
+
+The app adds plain-English labels so students do not have to interpret every number from scratch:
+
+- Strong financial fit.
+- Affordable but lower payoff.
+- High payoff but risky cost.
+- Likely unaffordable without major aid.
+- Debt warning.
+- Completion risk.
+- Data limited - verify manually.
+
+The app also calculates a yearly budget gap and a debt-to-early-earnings ratio. These are meant to make the tradeoff more concrete: can the student afford the college now, and does the typical debt look reasonable compared with early career earnings?
+
+## Net Price Calculator Companion
+
+College Value Lab does not try to replace official net price calculators. Federal rules require many colleges to publish a net price calculator using institutional data. The app now links to each college's reported calculator when College Scorecard provides it, and treats the calculator as the next step before making a final cost judgment.
+
+Estimate Confidence shows how much public evidence supports the app's estimate. It considers income-bracket net price, school-wide outcomes, debt, graduation, calculator-link availability, residency assumptions, and program-level data when an academic focus is selected.
+
+## Current Features
+
+- Searchable college explorer with filters for state, region, ownership, residency, size, estimated cost, graduation rate, and data coverage.
+- Income-bracket cost estimates for need-based aid when Scorecard data is available.
+- Personalized Need Value Score with profile presets.
+- Plain-English financial signals, budget-gap estimates, and debt-to-earnings warnings.
+- Estimate confidence and official net price calculator links.
+- Optional program-level outcomes by academic focus using College Scorecard field-of-study records.
+- Dedicated methodology page explaining scores, data sources, and limitations.
+- Selected Schools tracker with application status, personal fit rating, notes, shortlist comparison, and a decision score.
+- Data coverage indicators so missing public data is visible.
+
+## Next Features
+
+- Expand the program-level pull to cover the full cleaned institution list.
+- Add persistent user accounts and saved school lists.
+- Add a full methodology page with limitations and examples.
+- Publish with Streamlit Community Cloud.
