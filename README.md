@@ -127,6 +127,8 @@ Estimate Confidence shows how much public evidence supports the app's estimate. 
 ## Next Features
 
 - Expand the program-level pull to cover the full cleaned institution list.
-- Add persistent user accounts and saved school lists.
-- Add a full methodology page with limitations and examples.
-- Publish with Streamlit Community Cloud.
+- Add export/import for selected schools while the app is still in Streamlit.
+- Run real user testing with students and counselors.
+- Add persistent user accounts and saved school lists in a future full web app.
+- Rebuild the product with Next.js, Supabase Auth, Supabase Postgres, and Vercel when moving beyond Streamlit.
+- See `PRODUCT_MIGRATION_PLAN.md` for the full database/authentication roadmap.
