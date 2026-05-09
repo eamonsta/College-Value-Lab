@@ -410,6 +410,92 @@ def admissions_category(admission_rate):
     return "Less selective"
 
 
+def has_academic_profile(profile):
+    return (
+        profile.get("unweighted_gpa", 0) > 0
+        or profile.get("sat_score", 0) > 0
+        or profile.get("act_score", 0) > 0
+        or profile.get("ec_score", 0) > 0
+    )
+
+
+def academic_strength_score(profile):
+    pieces = []
+    weights = []
+
+    gpa = profile.get("unweighted_gpa", 0)
+    if gpa > 0:
+        pieces.append(clamp_score((gpa - 2.5) / 1.5 * 100))
+        weights.append(0.45)
+
+    sat = profile.get("sat_score", 0)
+    act = profile.get("act_score", 0)
+    if sat > 0:
+        pieces.append(clamp_score((sat - 900) / 700 * 100))
+        weights.append(0.35)
+    elif act > 0:
+        pieces.append(clamp_score((act - 17) / 19 * 100))
+        weights.append(0.35)
+
+    ec_score = profile.get("ec_score", 0)
+    if ec_score > 0:
+        pieces.append(clamp_score(ec_score * 10))
+        weights.append(0.20)
+
+    if not pieces:
+        return float("nan")
+
+    total_weight = sum(weights)
+    return sum(piece * weight for piece, weight in zip(pieces, weights)) / total_weight
+
+
+def personalized_admissions_fit(admission_rate, profile):
+    base_label = admissions_category(admission_rate)
+    if pd.isna(admission_rate):
+        return "Admissions data unavailable"
+    if not has_academic_profile(profile):
+        return base_label
+
+    strength = academic_strength_score(profile)
+    if pd.isna(strength):
+        return base_label
+
+    # Ultra-selective colleges stay reaches for everyone; strong stats only reduce how far the reach is.
+    if admission_rate <= 0.07:
+        if strength >= 90:
+            return "Reach"
+        if strength >= 75:
+            return "Far reach"
+        return "Extreme reach"
+    if admission_rate <= 0.12:
+        if strength >= 92:
+            return "Reach"
+        if strength >= 78:
+            return "Far reach"
+        return "Extreme reach"
+    if admission_rate <= 0.25:
+        if strength >= 88:
+            return "Target/reach"
+        if strength >= 70:
+            return "Reach"
+        return "Far reach"
+    if admission_rate <= 0.50:
+        if strength >= 82:
+            return "Target"
+        if strength >= 62:
+            return "Target/reach"
+        return "Reach"
+    if admission_rate <= 0.75:
+        if strength >= 68:
+            return "Likely"
+        if strength >= 48:
+            return "Target"
+        return "Target/reach"
+    if strength >= 45:
+        return "Likely"
+    return "Target"
+
+
 def risk_label(row, profile):
     cost = row["cost_after_aid"]
     graduation = row["graduation_rate"]
@@ -645,7 +731,8 @@ TOOLTIPS = {
     "risk_label": "Plain-English financial status based on budget fit, payoff, debt, graduation rate, and data completeness.",
     "estimate_confidence": "Trust level for the app's estimate. High means stronger public cost/outcome/program evidence and a calculator link; Low means fallback data or missing key fields.",
     "net_price_calculator": "Official college net price calculator when College Scorecard reports a link. These school calculators use institutional data and should be checked before making application or enrollment decisions.",
-    "admissions_category": "Admissions selectivity based on reported admission rate. This is not a personalized admission chance; it helps you avoid building a list made only of reach schools.",
+    "admissions_category": "Rough admissions realism label using reported admission rate and, if entered, GPA/test/EC profile. This is not a personalized chance calculator. Ultra-selective schools stay reaches for everyone.",
+    "academic_strength": "Rough 0-100 academic profile signal from GPA, SAT or ACT, and extracurricular strength. It only affects admissions display labels, not financial value scores.",
 }
 
 
@@ -687,6 +774,10 @@ def get_profile_settings():
         "in_state_importance": st.session_state.get("in_state_importance", 0),
         "aid_uncertainty": st.session_state.get("aid_uncertainty", 5),
         "first_gen": st.session_state.get("first_gen", False),
+        "unweighted_gpa": st.session_state.get("unweighted_gpa", 0.0),
+        "sat_score": st.session_state.get("sat_score", 0),
+        "act_score": st.session_state.get("act_score", 0),
+        "ec_score": st.session_state.get("ec_score", 0),
     }
 
 
@@ -704,6 +795,7 @@ def profile_has_personalization(profile):
         or profile["in_state_importance"] != 0
         or profile["aid_uncertainty"] != 5
         or profile["first_gen"]
+        or has_academic_profile(profile)
     )
 
 
@@ -829,6 +921,8 @@ def selected_school_next_step(row, profile):
         return "Run official calculator"
     if row.get("Admissions Category") in ("Extreme reach", "Reach"):
         return "Keep, but add safer admissions options"
+    if row.get("Admissions Category") in ("Far reach", "Target/reach"):
+        return "Balance with likelier admissions options"
     if profile["annual_family_budget"] <= 0:
         return "Add yearly budget"
     if row["Affordability Verdict"] == "Large gap":
@@ -960,6 +1054,8 @@ def describe_score_mode(profile):
         parts.append(f"home state {profile['home_state']}")
     if profile["first_gen"]:
         parts.append("first-generation support emphasized")
+    if has_academic_profile(profile):
+        parts.append(f"academic profile signal {number(academic_strength_score(profile))}/100")
     return "; ".join(parts) + "."
 
 
@@ -1077,7 +1173,11 @@ def add_need_value_score(data, profile=None):
         axis=1,
     )
     data["debt_safety_label"] = data["debt_to_earnings_after_grad"].apply(debt_safety_label)
-    data["admissions_category"] = data["admission_rate"].apply(admissions_category)
+    data["admissions_selectivity"] = data["admission_rate"].apply(admissions_category)
+    data["academic_strength_score"] = academic_strength_score(profile)
+    data["admissions_category"] = data["admission_rate"].apply(
+        lambda value: personalized_admissions_fit(value, profile)
+    )
     data["risk_label"] = data.apply(lambda row: risk_label(row, profile), axis=1)
     return data
 
@@ -1403,7 +1503,12 @@ def show_college_profile(row):
     col5, col6, col7 = st.columns(3)
     col5.metric("Graduation Rate", pct(row["graduation_rate"]), help=TOOLTIPS["graduation_rate"])
     col6.metric("On-Time Completion", pct(row["on_time_completion_rate"]), help=TOOLTIPS["on_time_completion_rate"])
-    col7.metric("Admissions Category", row["admissions_category"], help=TOOLTIPS["admissions_category"])
+    col7.metric("Admissions Fit", row["admissions_category"], help=TOOLTIPS["admissions_category"])
+    if has_academic_profile(profile):
+        st.caption(
+            f"Admissions fit uses your academic profile signal ({number(row['academic_strength_score'])}/100) "
+            f"plus the school's reported admission rate. It is not a chance of admission."
+        )
     st.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
     plain_note(plain_english_summary(row, get_profile_settings()))
     if pd.notna(row.get("program_match")):
@@ -1542,6 +1647,7 @@ def add_selected_school(row, show_message=True):
             "Estimate Trust Score": row.get("estimate_confidence_score"),
             "Missing Data Warning": row.get("data_warning"),
             "Admissions Category": row.get("admissions_category"),
+            "Admissions Selectivity": row.get("admissions_selectivity"),
             "Calculator URL": row.get("net_price_calculator_url"),
             "Official Calculator Estimate": None,
             "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
@@ -1585,6 +1691,7 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Estimate Trust Score": row.get("estimate_confidence_score"),
                 "Missing Data Warning": row.get("data_warning"),
                 "Admissions Category": row.get("admissions_category"),
+                "Admissions Selectivity": row.get("admissions_selectivity"),
                 "Calculator URL": row.get("net_price_calculator_url"),
                 "Official Calculator Estimate": saved.get("Official Calculator Estimate"),
                 "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
@@ -1696,6 +1803,43 @@ def show_personal_profile_page():
             help="Only affects the score when you choose a home state.",
         )
 
+        st.markdown("##### Admissions profile")
+        st.caption(
+            "Optional. These inputs only change admissions realism labels like reach, target, and likely. They do not change financial scores."
+        )
+        st.session_state["unweighted_gpa"] = st.number_input(
+            "Unweighted GPA",
+            min_value=0.0,
+            max_value=4.0,
+            value=float(st.session_state.get("unweighted_gpa", 0.0)),
+            step=0.01,
+            help="Use 0 if you do not want to include GPA. This is a rough signal, not an admissions prediction.",
+        )
+        test_cols = st.columns(2)
+        st.session_state["sat_score"] = test_cols[0].number_input(
+            "SAT score",
+            min_value=0,
+            max_value=1600,
+            value=int(st.session_state.get("sat_score", 0)),
+            step=10,
+            help="Use 0 if not submitted or unknown. If both SAT and ACT are entered, SAT is used.",
+        )
+        st.session_state["act_score"] = test_cols[1].number_input(
+            "ACT score",
+            min_value=0,
+            max_value=36,
+            value=int(st.session_state.get("act_score", 0)),
+            step=1,
+            help="Use 0 if not submitted or unknown.",
+        )
+        st.session_state["ec_score"] = st.slider(
+            "Extracurricular strength estimate",
+            0,
+            10,
+            int(st.session_state.get("ec_score", 0)),
+            help="Rough self-rating from 0 to 10 for activities, leadership, awards, work, service, projects, or responsibilities.",
+        )
+
     st.markdown("##### What should matter most?")
     slider_col1, slider_col2 = st.columns(2)
     with slider_col1:
@@ -1745,6 +1889,15 @@ def show_personal_profile_page():
         "or may be able to pay full cost without need-based aid."
     )
     st.write(describe_score_mode(profile))
+    if has_academic_profile(profile):
+        st.metric(
+            "Academic Profile Signal",
+            number(academic_strength_score(profile)),
+            help=TOOLTIPS["academic_strength"],
+        )
+        st.caption(
+            "Admissions labels are intentionally conservative. For example, ultra-selective colleges remain reaches even for excellent applicants."
+        )
 
     weights_table = pd.DataFrame(
         [
@@ -1861,8 +2014,10 @@ def balanced_shortlist_warnings(selected_table, profile):
     if school_count == 0:
         return
 
-    reach_count = int(selected_table["Admissions Category"].isin(["Extreme reach", "Reach"]).sum())
-    selective_count = int(selected_table["Admissions Category"].isin(["Selective", "Moderately selective", "Less selective"]).sum())
+    reach_labels = ["Extreme reach", "Far reach", "Reach", "Target/reach"]
+    realistic_labels = ["Target", "Likely", "Selective", "Moderately selective", "Less selective"]
+    reach_count = int(selected_table["Admissions Category"].isin(reach_labels).sum())
+    realistic_count = int(selected_table["Admissions Category"].isin(realistic_labels).sum())
     within_budget_count = int((selected_table["Affordability Verdict"] == "Within budget").sum())
     risky_cost_count = int(selected_table["Survivability Label"].isin(["Risky stretch", "Likely unsafe"]).sum())
     calculator_count = int(selected_table["Official Calculator Estimate"].notna().sum())
@@ -1883,10 +2038,10 @@ def balanced_shortlist_warnings(selected_table, profile):
             f"{reach_count} of {school_count} selected schools are reach or extreme-reach schools by admission rate.",
             "Keep them if you like them, but add less selective schools that are also financially survivable.",
         ))
-    if school_count >= 3 and selective_count == 0:
+    if school_count >= 3 and realistic_count == 0:
         warning_rows.append((
             "No admissions balance",
-            "Every selected school is currently categorized as a reach, extreme reach, or missing admissions data.",
+            "Every selected school is currently categorized as a reach-type school or missing admissions data.",
             "Add schools with more realistic admission rates so the list is not only aspirational.",
         ))
     if profile["annual_family_budget"] > 0 and within_budget_count == 0:
@@ -1995,6 +2150,8 @@ def show_selected_schools_page(scenario_data):
         selected_table["Missing Data Warning"] = "Enough public data"
     if "Admissions Category" not in selected_table.columns:
         selected_table["Admissions Category"] = "Admissions data unavailable"
+    if "Admissions Selectivity" not in selected_table.columns:
+        selected_table["Admissions Selectivity"] = selected_table["Admissions Category"]
     if "Calculator URL" not in selected_table.columns:
         selected_table["Calculator URL"] = None
     if "Official Calculator Estimate" not in selected_table.columns:
@@ -2257,6 +2414,7 @@ def show_selected_schools_page(scenario_data):
                 help="Plain-English interpretation of Financial Survivability.",
             ),
             "Admissions Category": st.column_config.TextColumn(
+                "Admissions Fit",
                 help=TOOLTIPS["admissions_category"],
             ),
             "Estimated Cost After Aid": st.column_config.NumberColumn("App's Yearly Estimated Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
@@ -2581,7 +2739,7 @@ def show_methodology_page():
             ["Future ROI Score", "Standardized future payoff score.", "0-100, higher is better", "Percentile rank of the raw ROI Index compared with other rows. 85+ excellent, 70-84 strong, 50-69 mixed, under 50 weak."],
             ["Raw ROI Index", "Transparent formula behind ROI Score.", "ratio", "(10-year earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate."],
             ["Program Value", "Major/focus-specific value signal when field-of-study data exists.", "0-100", "Program earnings, program ROI, and lower program debt."],
-            ["Admissions Category", "Selectivity warning so students do not build a list only from reach schools.", "label", "Reported admission rate grouped into less selective, moderately selective, selective, reach, and extreme reach."],
+            ["Admissions Fit", "Admissions realism warning so students do not build a list only from reach schools.", "label", "Reported admission rate plus optional GPA, SAT/ACT, and EC profile. Ultra-selective schools stay reaches for everyone."],
             ["Budget/Value Status", "Plain-English risk category.", "label", "Combines affordability, debt, graduation, payoff, and missing-data warnings."],
             ["Decision Score", "Shortlist helper only.", "0-100", "Normally 70% data score and 30% personal fit. If the user enters an official calculator estimate, the score uses 50% data score, 30% calculator cost fit, and 20% personal fit."],
         ],
@@ -2645,7 +2803,7 @@ def show_methodology_page():
         """
 - This is not a financial-aid offer and cannot know merit scholarships.
 - Program outcomes are historical medians, not predictions for a specific student.
-- Admissions Category is not a personalized chance of admission.
+- Admissions Fit is not a personalized chance of admission. It does not know essays, recommendations, course rigor, hooks, institutional priorities, or school-specific applicant pools.
 - Major choice, location, internships, family support, and graduate school can change outcomes a lot.
 - Some fields are privacy-suppressed or missing.
 - The score is meant to support comparison, not replace college research or financial-aid letters.
@@ -2725,6 +2883,8 @@ def show_college_browser(data, visible_rows=15):
             "estimate_confidence_score",
             "data_warning",
             "admissions_category",
+            "admissions_selectivity",
+            "academic_strength_score",
             "need_value_score",
             "data_coverage",
         ]
@@ -2755,6 +2915,8 @@ def show_college_browser(data, visible_rows=15):
             "estimate_confidence_score": "Confidence Score",
             "data_warning": "Missing Data Warning",
             "admissions_category": "Admissions Category",
+            "admissions_selectivity": "Admissions Selectivity",
+            "academic_strength_score": "Academic Profile Signal",
             "need_value_score": "Need Value Score",
             "data_coverage": "Data Coverage",
         }
@@ -2770,12 +2932,11 @@ def show_college_browser(data, visible_rows=15):
     column_order = [
         "College name",
         "State",
-            "Financial Survivability",
-            "Survivability Label",
-            "Admissions Category",
-            "Need Value Score",
-        "Budget/Value Status",
+        "Financial Survivability",
+        "Survivability Label",
         "Admissions Category",
+        "Need Value Score",
+        "Budget/Value Status",
         "Yearly Estimated Cost After Aid",
         "Yearly Over/Under Budget",
         "Future ROI Score",
@@ -2784,6 +2945,8 @@ def show_college_browser(data, visible_rows=15):
     if show_detailed_columns:
         column_order.extend([
             "ROI Rating",
+            "Admissions Selectivity",
+            "Academic Profile Signal",
             "Earnings 10 Years Later",
             "Earnings After Grad",
             "Debt / Early Earnings",
@@ -2814,6 +2977,8 @@ def show_college_browser(data, visible_rows=15):
                 "Focus Match",
                 "Program Earnings",
                 "Program Debt",
+                "Admissions Selectivity",
+                "Academic Profile Signal",
                 "Confidence",
                 "Missing Data Warning",
                 "Data Coverage",
@@ -2838,7 +3003,16 @@ def show_college_browser(data, visible_rows=15):
             ),
             "State": st.column_config.TextColumn(help="U.S. state where the college is located."),
             "Budget/Value Status": st.column_config.TextColumn(help=TOOLTIPS["risk_label"]),
-            "Admissions Category": st.column_config.TextColumn(help=TOOLTIPS["admissions_category"]),
+            "Admissions Category": st.column_config.TextColumn("Admissions Fit", help=TOOLTIPS["admissions_category"]),
+            "Admissions Selectivity": st.column_config.TextColumn(
+                help="Generic selectivity label using only the school's reported admission rate."
+            ),
+            "Academic Profile Signal": st.column_config.ProgressColumn(
+                help=TOOLTIPS["academic_strength"],
+                format="%.0f",
+                min_value=0,
+                max_value=100,
+            ),
             "Financial Survivability": st.column_config.ProgressColumn(
                 "Financial Survivability (0-100)",
                 help=TOOLTIPS["financial_survivability"],
