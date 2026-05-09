@@ -567,6 +567,22 @@ def add_estimate_confidence(data, profile):
     data["estimate_confidence_score"] = confidence.apply(lambda value: value[0])
     data["estimate_confidence"] = confidence.apply(lambda value: value[1])
     data["estimate_confidence_notes"] = confidence.apply(lambda value: value[2])
+    data["financial_survivability_score"] = data.apply(
+        lambda row: financial_survivability_score_for_values(
+            row.get("cost_after_aid"),
+            profile["annual_family_budget"],
+            profile["max_comfortable_debt"],
+            row.get("median_debt"),
+            row.get("earnings_after_grad"),
+            row.get("graduation_rate"),
+            row.get("estimate_confidence_score"),
+            profile["aid_uncertainty"],
+        ),
+        axis=1,
+    )
+    data["financial_survivability_label"] = data["financial_survivability_score"].apply(
+        financial_survivability_label
+    )
     data["data_warning"] = "Enough public data"
     data.loc[data["data_coverage"] < 80, "data_warning"] = "Verify missing public data"
     data.loc[data["estimate_confidence"] == "Low", "data_warning"] = "Low confidence - verify"
@@ -605,6 +621,7 @@ TOOLTIPS = {
     "median_earnings_10yr": "Median earnings 10 years after students first entered the college.",
     "need_value_score": "Personalized 0-100 value score for cost-sensitive students. Higher is better. It uses estimated yearly cost after aid, budget fit, debt, graduation rate, earnings, and profile settings.",
     "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It blends Need Value with major/program-level earnings and debt when available.",
+    "financial_survivability": "Personalized 0-100 safety score asking: can this student realistically afford and finish this college without taking on unsafe debt? It uses yearly budget fit, debt stress, graduation rate, and estimate trust.",
     "roi_score": "0-100 payoff score compared with other rows in this dataset. Higher is better. 85+ is excellent, 70-84 strong, 50-69 mixed/above average, 30-49 weak, below 30 poor.",
     "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is kept for transparency; ROI Score is easier to interpret.",
     "estimated_4yr_net_cost": "Estimated total after-aid cost for four years.",
@@ -696,6 +713,80 @@ def selected_school_cost_score(cost, yearly_budget):
     if yearly_budget <= 0:
         return clamp_score(100 - (cost / 90000 * 100))
     return budget_fit_score(cost, yearly_budget)
+
+
+def debt_stress_score(median_debt, earnings_after_grad):
+    ratio = debt_to_earnings_ratio(median_debt, earnings_after_grad)
+    if pd.isna(ratio):
+        return float("nan")
+    return clamp_score(100 - (ratio * 120))
+
+
+def financial_survivability_score_for_values(
+    yearly_cost,
+    yearly_budget,
+    max_debt,
+    median_debt,
+    earnings_after_grad,
+    graduation_rate,
+    confidence_score,
+    aid_uncertainty=5,
+):
+    if yearly_budget <= 0 or pd.isna(yearly_cost):
+        return float("nan")
+
+    budget_score = budget_fit_score(yearly_cost, yearly_budget)
+    debt_score = debt_fit_score(median_debt, max_debt) if max_debt > 0 else float("nan")
+    debt_stress = debt_stress_score(median_debt, earnings_after_grad)
+    if pd.notna(debt_score) and pd.notna(debt_stress):
+        debt_component = debt_score * 0.65 + debt_stress * 0.35
+    elif pd.notna(debt_score):
+        debt_component = debt_score
+    elif pd.notna(debt_stress):
+        debt_component = debt_stress
+    else:
+        debt_component = 55
+
+    completion_component = graduation_rate * 100 if pd.notna(graduation_rate) else 55
+    trust_component = confidence_score if pd.notna(confidence_score) else 55
+    raw_score = (
+        budget_score * 0.55
+        + debt_component * 0.20
+        + completion_component * 0.15
+        + trust_component * 0.10
+    )
+
+    yearly_gap = yearly_cost - yearly_budget
+    if yearly_gap > max(10000, yearly_budget * 0.50):
+        raw_score = min(raw_score, 49)
+    elif yearly_gap > max(5000, yearly_budget * 0.25):
+        raw_score = min(raw_score, 64)
+
+    uncertainty_penalty = max(0, aid_uncertainty - 5) * 1.5
+    return clamp_score(raw_score - uncertainty_penalty)
+
+
+def financial_survivability_label(score):
+    if pd.isna(score):
+        return "Add budget"
+    if score >= 85:
+        return "Financially safe"
+    if score >= 70:
+        return "Manageable"
+    if score >= 50:
+        return "Risky stretch"
+    return "Likely unsafe"
+
+
+def financial_survivability_summary(label):
+    explanations = {
+        "Financially safe": "Cost fits the entered budget with manageable debt/completion risk.",
+        "Manageable": "Looks possible, but still verify the official calculator and aid letter.",
+        "Risky stretch": "Could work only with stronger aid, lower debt, or a bigger family contribution.",
+        "Likely unsafe": "The cost gap or debt risk is too high for this profile.",
+        "Add budget": "Enter a yearly family budget to calculate survivability.",
+    }
+    return explanations.get(label, "Use this as a planning signal, not a final decision.")
 
 
 def affordability_gap_penalty(data, profile):
@@ -1241,16 +1332,24 @@ def show_college_profile(row):
 
     col1, col2, col3, col4 = st.columns(4)
     profile = get_profile_settings()
-    if profile["academic_focus"]:
-        col1.metric("Major-Adjusted Value", number(row["focus_adjusted_score"]), help=TOOLTIPS["focus_adjusted_score"])
-    else:
-        col1.metric("Need Value Score", number(row["need_value_score"]), help=TOOLTIPS["need_value_score"])
-    col2.metric("Budget/Value Status", row["risk_label"], help=TOOLTIPS["risk_label"])
-    col3.metric("Yearly Amount Over/Under Budget", signed_money(row["annual_budget_gap"]), help=TOOLTIPS["budget_gap"])
+    col1.metric(
+        "Financial Survivability",
+        number(row["financial_survivability_score"]),
+        row["financial_survivability_label"],
+        help=TOOLTIPS["financial_survivability"],
+    )
+    score_to_show = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
+    score_label = "Major-Adjusted Value" if profile["academic_focus"] else "Need Value Score"
+    col2.metric(score_label, number(score_to_show), help=TOOLTIPS["focus_adjusted_score"] if profile["academic_focus"] else TOOLTIPS["need_value_score"])
+    col3.metric("Yearly Over/Under Budget", signed_money(row["annual_budget_gap"]), help=TOOLTIPS["budget_gap"])
     col4.metric(
         "Debt / Early Earnings",
         pct(row["debt_to_earnings_after_grad"]),
         help=TOOLTIPS["debt_to_earnings"],
+    )
+    plain_note(
+        f"Survivability label: {row['financial_survivability_label']}. "
+        f"{financial_survivability_summary(row['financial_survivability_label'])}"
     )
     st.caption(
         f"Trust label: {row['estimate_confidence']} confidence ({number(row['estimate_confidence_score'])}/100). "
@@ -1399,6 +1498,8 @@ def add_selected_school(row, show_message=True):
             "College": row["display_name"],
             "State": row["state"],
             "Status": "Considering",
+            "Financial Survivability": row.get("financial_survivability_score"),
+            "Survivability Label": row.get("financial_survivability_label"),
             "Need Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
             "Budget/Value Status": row["risk_label"],
             "Estimated Cost After Aid": row["cost_after_aid"],
@@ -1408,6 +1509,7 @@ def add_selected_school(row, show_message=True):
             "Major-Adjusted Value": row.get("focus_adjusted_score"),
             "Focus Match": row.get("focus_match_status"),
             "Estimate Trust Level": row.get("estimate_confidence"),
+            "Estimate Trust Score": row.get("estimate_confidence_score"),
             "Missing Data Warning": row.get("data_warning"),
             "Calculator URL": row.get("net_price_calculator_url"),
             "Official Calculator Estimate": None,
@@ -1418,6 +1520,8 @@ def add_selected_school(row, show_message=True):
             "Program Value": row.get("program_value_score"),
             "Earnings After Grad": row["earnings_after_grad"],
             "Earnings 10 Years Later": row["earnings_10yr_used"],
+            "Graduation Rate": row["graduation_rate"],
+            "Median Debt": row["median_debt"],
             "Personal Fit": 5,
             "Notes": "",
         },
@@ -1436,6 +1540,8 @@ def refresh_selected_school_data(selected, scenario_data):
                 **saved,
                 "College": row["display_name"],
                 "State": row["state"],
+                "Financial Survivability": row.get("financial_survivability_score"),
+                "Survivability Label": row.get("financial_survivability_label"),
                 "Need Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
                 "Budget/Value Status": row["risk_label"],
                 "Estimated Cost After Aid": row["cost_after_aid"],
@@ -1445,6 +1551,7 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Major-Adjusted Value": row.get("focus_adjusted_score"),
                 "Focus Match": row.get("focus_match_status"),
                 "Estimate Trust Level": row.get("estimate_confidence"),
+                "Estimate Trust Score": row.get("estimate_confidence_score"),
                 "Missing Data Warning": row.get("data_warning"),
                 "Calculator URL": row.get("net_price_calculator_url"),
                 "Official Calculator Estimate": saved.get("Official Calculator Estimate"),
@@ -1455,6 +1562,8 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Program Value": row.get("program_value_score"),
                 "Earnings After Grad": row["earnings_after_grad"],
                 "Earnings 10 Years Later": row["earnings_10yr_used"],
+                "Graduation Rate": row["graduation_rate"],
+                "Median Debt": row["median_debt"],
             }
         else:
             refreshed[scenario_id] = saved
@@ -1629,6 +1738,91 @@ def show_personal_profile_page():
     )
 
 
+def show_what_if_simulator(selected_table, profile):
+    st.markdown("##### What-if Simulator")
+    with st.expander("Test scholarship, budget, or debt changes", expanded=False):
+        st.caption(
+            "Use this to answer questions like: what if this school gives me another grant, or what if my family can pay a little more?"
+        )
+        col1, col2, col3 = st.columns(3)
+        temp_budget = col1.number_input(
+            "Temporary yearly family budget",
+            min_value=0,
+            max_value=150000,
+            value=int(profile["annual_family_budget"]),
+            step=1000,
+            help="Try a different yearly amount your family can pay without changing Personal Profile.",
+        )
+        extra_scholarship = col2.number_input(
+            "Extra yearly grant/scholarship",
+            min_value=0,
+            max_value=100000,
+            value=0,
+            step=1000,
+            help="Subtracts this amount from each selected school's yearly cost.",
+        )
+        temp_debt_limit = col3.number_input(
+            "Temporary max total debt comfort",
+            min_value=0,
+            max_value=300000,
+            value=int(profile["max_comfortable_debt"]),
+            step=2500,
+            help="Try a different total debt limit without changing Personal Profile.",
+        )
+
+        sim = selected_table.copy()
+        sim["Simulated Yearly Cost"] = (
+            pd.to_numeric(sim["Cost Used In Decision"], errors="coerce") - extra_scholarship
+        ).clip(lower=0)
+        sim["Simulated Yearly Over/Under Budget"] = sim["Simulated Yearly Cost"] - temp_budget
+        if temp_budget <= 0:
+            sim["Simulated Yearly Over/Under Budget"] = None
+        sim["Simulated Survivability"] = sim.apply(
+            lambda row: financial_survivability_score_for_values(
+                row["Simulated Yearly Cost"],
+                temp_budget,
+                temp_debt_limit,
+                row.get("Median Debt"),
+                row.get("Earnings After Grad"),
+                row.get("Graduation Rate"),
+                row.get("Estimate Trust Score"),
+                profile["aid_uncertainty"],
+            ),
+            axis=1,
+        )
+        sim["Simulated Label"] = sim["Simulated Survivability"].apply(financial_survivability_label)
+        sim = sim.sort_values("Simulated Survivability", ascending=False, na_position="last")
+        st.dataframe(
+            sim[
+                [
+                    "College",
+                    "Simulated Label",
+                    "Simulated Survivability",
+                    "Simulated Yearly Cost",
+                    "Simulated Yearly Over/Under Budget",
+                    "Cost Used In Decision",
+                ]
+            ],
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Simulated Survivability": st.column_config.ProgressColumn(
+                    "Simulated Survivability (0-100)",
+                    min_value=0,
+                    max_value=100,
+                    format="%.0f",
+                    help=TOOLTIPS["financial_survivability"],
+                ),
+                "Simulated Yearly Cost": st.column_config.NumberColumn(format="$%d"),
+                "Simulated Yearly Over/Under Budget": st.column_config.NumberColumn(format="$%d"),
+                "Cost Used In Decision": st.column_config.NumberColumn(
+                    "Original Yearly Cost Used",
+                    format="$%d",
+                ),
+            },
+        )
+
+
 def show_selected_schools_page(scenario_data):
     st.subheader("Selected Schools")
     selected = st.session_state.get("selected_schools", {})
@@ -1667,6 +1861,10 @@ def show_selected_schools_page(scenario_data):
         selected_table["Earnings After Grad"] = None
     if "Budget/Value Status" not in selected_table.columns:
         selected_table["Budget/Value Status"] = "Not calculated"
+    if "Financial Survivability" not in selected_table.columns:
+        selected_table["Financial Survivability"] = None
+    if "Survivability Label" not in selected_table.columns:
+        selected_table["Survivability Label"] = "Add budget"
     if "Yearly Over/Under Budget" not in selected_table.columns:
         selected_table["Yearly Over/Under Budget"] = None
     if "Future ROI Score" not in selected_table.columns:
@@ -1679,6 +1877,13 @@ def show_selected_schools_page(scenario_data):
         selected_table["Focus Match"] = "No academic focus entered"
     if "Estimate Trust Level" not in selected_table.columns:
         selected_table["Estimate Trust Level"] = "Not calculated"
+    if "Estimate Trust Score" not in selected_table.columns:
+        selected_table["Estimate Trust Score"] = selected_table["Estimate Trust Level"].map(
+            {"High": 85, "Medium": 65, "Low": 35}
+        )
+    selected_table["Estimate Trust Score"] = pd.to_numeric(
+        selected_table["Estimate Trust Score"], errors="coerce"
+    )
     if "Missing Data Warning" not in selected_table.columns:
         selected_table["Missing Data Warning"] = "Enough public data"
     if "Calculator URL" not in selected_table.columns:
@@ -1687,6 +1892,16 @@ def show_selected_schools_page(scenario_data):
         selected_table["Official Calculator Estimate"] = None
     if "Debt / Early Earnings" not in selected_table.columns:
         selected_table["Debt / Early Earnings"] = None
+    if "Median Debt" not in selected_table.columns:
+        selected_table["Median Debt"] = None
+    if "Graduation Rate" not in selected_table.columns:
+        selected_table["Graduation Rate"] = None
+    selected_table["Earnings After Grad"] = pd.to_numeric(
+        selected_table["Earnings After Grad"], errors="coerce"
+    )
+    selected_table["Graduation Rate"] = pd.to_numeric(
+        selected_table["Graduation Rate"], errors="coerce"
+    )
     for column in ["Program Match", "Program Earnings", "Program Debt", "Program Value"]:
         if column not in selected_table.columns:
             selected_table[column] = None
@@ -1706,6 +1921,29 @@ def show_selected_schools_page(scenario_data):
     selected_table["Calculator Cost Score"] = selected_table["Cost Used In Decision"].apply(
         lambda value: selected_school_cost_score(value, profile["annual_family_budget"])
     )
+    selected_table["Median Debt"] = pd.to_numeric(selected_table["Median Debt"], errors="coerce")
+    estimated_debt = (
+        pd.to_numeric(selected_table["Debt / Early Earnings"], errors="coerce")
+        / 100
+        * pd.to_numeric(selected_table["Earnings After Grad"], errors="coerce")
+    )
+    selected_table["Median Debt"] = selected_table["Median Debt"].fillna(estimated_debt)
+    selected_table["Financial Survivability"] = selected_table.apply(
+        lambda row: financial_survivability_score_for_values(
+            row["Cost Used In Decision"],
+            profile["annual_family_budget"],
+            profile["max_comfortable_debt"],
+            row.get("Median Debt"),
+            row.get("Earnings After Grad"),
+            row.get("Graduation Rate"),
+            row.get("Estimate Trust Score"),
+            profile["aid_uncertainty"],
+        ),
+        axis=1,
+    )
+    selected_table["Survivability Label"] = selected_table["Financial Survivability"].apply(
+        financial_survivability_label
+    )
     has_official_cost = official_calculator_cost.notna()
     selected_table["Decision Score"] = score_for_decision.fillna(0) * 0.70 + selected_table["Personal Fit"].fillna(0) * 10 * 0.30
     selected_table.loc[has_official_cost, "Decision Score"] = (
@@ -1719,6 +1957,7 @@ def show_selected_schools_page(scenario_data):
     )
     selected_table = selected_table.sort_values("Decision Score", ascending=False)
 
+    best_survival = selected_table.sort_values("Financial Survivability", ascending=False, na_position="last").iloc[0]
     best_value = selected_table.sort_values("Need Value Score", ascending=False).iloc[0]
     lowest_cost = selected_table.sort_values("Estimated Cost After Aid", ascending=True, na_position="last").iloc[0]
     best_fit = selected_table.sort_values("Personal Fit", ascending=False, na_position="last").iloc[0]
@@ -1726,8 +1965,8 @@ def show_selected_schools_page(scenario_data):
     within_budget = int((selected_table["Affordability Verdict"] == "Within budget").sum())
     if profile["academic_focus"] and selected_table["Major-Adjusted Value"].notna().any():
         best_focus = selected_table.sort_values("Major-Adjusted Value", ascending=False, na_position="last").iloc[0]
-        summary_cols = st.columns(4)
-        with summary_cols[3]:
+        summary_cols = st.columns(5)
+        with summary_cols[4]:
             summary_card(
                 "Best For Focus",
                 best_focus["College"],
@@ -1735,22 +1974,29 @@ def show_selected_schools_page(scenario_data):
                 "Highest major-adjusted value score in your selected list.",
             )
     else:
-        summary_cols = st.columns(3)
+        summary_cols = st.columns(4)
     with summary_cols[0]:
+        summary_card(
+            "Safest Financial Fit",
+            best_survival["College"],
+            f"{best_survival['Survivability Label']}: {number(best_survival['Financial Survivability'])}",
+            "Best Financial Survivability score in your selected list.",
+        )
+    with summary_cols[1]:
         summary_card(
             "Best Need Value",
             best_value["College"],
             f"Need Value: {number(best_value['Need Value Score'])}",
             "Highest public-data Need Value Score in your selected list.",
         )
-    with summary_cols[1]:
+    with summary_cols[2]:
         summary_card(
             "Lowest Estimated Cost",
             lowest_cost["College"],
             f"Yearly estimate: {money(lowest_cost['Estimated Cost After Aid'])}",
             "Lowest yearly estimated cost after aid in your selected list.",
         )
-    with summary_cols[2]:
+    with summary_cols[3]:
         summary_card(
             "Best Personal Fit",
             best_fit["College"],
@@ -1774,38 +2020,25 @@ def show_selected_schools_page(scenario_data):
     )
     if not show_budget_gap:
         st.info("Add the yearly amount your family can actually pay in Personal Profile to show Yearly Over/Under Budget.")
+    show_shortlist_details = st.toggle(
+        "Show detailed shortlist columns",
+        value=False,
+        help="Turn on for ROI, earnings, debt, program outcomes, trust level, and extra public-data fields. Off keeps the shortlist focused on decisions.",
+    )
     selected_column_order = [
         "College",
-        "State",
         "Status",
         "Next Step",
-        "Calculator URL",
-        "Decision Score",
-        "Budget/Value Status",
+        "Financial Survivability",
+        "Survivability Label",
         "Affordability Verdict",
         "Cost Used In Decision",
-        "Estimated Cost After Aid",
         "Official Calculator Estimate",
         "Yearly Over/Under Budget",
-        "Four-Year Gap",
         "Personal Fit",
-        "Need Value Score",
-        "Major-Adjusted Value",
-        "Future ROI Score",
-        "ROI Rating",
-        "Earnings After Grad",
-        "Earnings 10 Years Later",
-        "Debt / Early Earnings",
-        "Estimate Trust Level",
-        "Missing Data Warning",
         "Notes",
     ]
-    if not show_budget_gap:
-        selected_column_order.remove("Yearly Over/Under Budget")
-        selected_column_order.remove("Four-Year Gap")
-    if not profile["academic_focus"]:
-        selected_column_order.remove("Major-Adjusted Value")
-    if selected_table["Program Match"].notna().any():
+    if show_shortlist_details:
         selected_column_order = [
             "College",
             "State",
@@ -1813,6 +2046,8 @@ def show_selected_schools_page(scenario_data):
             "Next Step",
             "Calculator URL",
             "Decision Score",
+            "Financial Survivability",
+            "Survivability Label",
             "Budget/Value Status",
             "Affordability Verdict",
             "Cost Used In Decision",
@@ -1821,24 +2056,33 @@ def show_selected_schools_page(scenario_data):
             "Yearly Over/Under Budget",
             "Four-Year Gap",
             "Personal Fit",
-            "Major-Adjusted Value",
             "Need Value Score",
-            "Program Value",
-            "Program Match",
-            "Focus Match",
-            "Program Earnings",
-            "Program Debt",
+            "Major-Adjusted Value",
             "Future ROI Score",
+            "ROI Rating",
+            "Earnings After Grad",
+            "Earnings 10 Years Later",
+            "Debt / Early Earnings",
             "Estimate Trust Level",
             "Missing Data Warning",
             "Notes",
         ]
-        if not show_budget_gap:
-            selected_column_order.remove("Yearly Over/Under Budget")
+    if not show_budget_gap:
+        selected_column_order.remove("Yearly Over/Under Budget")
+        if "Four-Year Gap" in selected_column_order:
             selected_column_order.remove("Four-Year Gap")
-        if not profile["academic_focus"]:
+    if not profile["academic_focus"]:
+        if "Major-Adjusted Value" in selected_column_order:
             selected_column_order.remove("Major-Adjusted Value")
-            selected_column_order.remove("Focus Match")
+    if selected_table["Program Match"].notna().any():
+        program_columns = ["Program Value", "Program Match", "Focus Match", "Program Earnings", "Program Debt"]
+        if show_shortlist_details:
+            insertion_index = selected_column_order.index("Future ROI Score") if "Future ROI Score" in selected_column_order else len(selected_column_order) - 1
+            for program_column in reversed(program_columns):
+                if program_column not in selected_column_order:
+                    selected_column_order.insert(insertion_index, program_column)
+            if not profile["academic_focus"] and "Focus Match" in selected_column_order:
+                selected_column_order.remove("Focus Match")
 
     edited = st.data_editor(
         selected_table,
@@ -1849,6 +2093,8 @@ def show_selected_schools_page(scenario_data):
             "College",
             "State",
             "Decision Score",
+            "Financial Survivability",
+            "Survivability Label",
             "Need Value Score",
             "Major-Adjusted Value",
             "Focus Match",
@@ -1884,6 +2130,17 @@ def show_selected_schools_page(scenario_data):
                 format="%.0f",
                 min_value=0,
                 max_value=100,
+            ),
+            "Financial Survivability": st.column_config.ProgressColumn(
+                "Financial Survivability (0-100)",
+                help=TOOLTIPS["financial_survivability"],
+                format="%.0f",
+                min_value=0,
+                max_value=100,
+            ),
+            "Survivability Label": st.column_config.TextColumn(
+                "Survivability Label",
+                help="Plain-English interpretation of Financial Survivability.",
             ),
             "Estimated Cost After Aid": st.column_config.NumberColumn("App's Yearly Estimated Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
             "Official Calculator Estimate": st.column_config.NumberColumn(
@@ -1988,6 +2245,8 @@ def show_selected_schools_page(scenario_data):
             st.session_state["selected_schools"].pop(school_to_remove, None)
             st.success(f"Removed {removed_name}.")
             st.rerun()
+
+    show_what_if_simulator(selected_table, profile)
 
     st.download_button(
         "Download selected schools CSV",
@@ -2199,6 +2458,7 @@ def show_methodology_page():
     st.markdown("##### Score dictionary")
     score_table = pd.DataFrame(
         [
+            ["Financial Survivability", "Memorable safety score: can this student realistically afford and finish this school without unsafe debt?", "0-100, higher is safer", "Yearly budget fit, debt stress, graduation rate, and estimate trust. Large budget gaps cap the score."],
             ["Need Value Score", "Main personalized score for cost-sensitive students.", "0-100, higher is better", "Estimated yearly cost after aid, budget fit, debt, graduation, earnings, home-state fit."],
             ["Major-Adjusted Value", "Main score when Academic focus is entered.", "0-100, higher is better", "60% Need Value and 40% Program Value when program data exists. Schools without matching program data receive a penalty."],
             ["Future ROI Score", "Standardized future payoff score.", "0-100, higher is better", "Percentile rank of the raw ROI Index compared with other rows. 85+ excellent, 70-84 strong, 50-69 mixed, under 50 weak."],
@@ -2210,6 +2470,14 @@ def show_methodology_page():
         columns=["Score", "What it means", "Scale", "Main ingredients"],
     )
     st.dataframe(score_table, width="stretch", hide_index=True)
+
+    st.markdown("##### Financial Survivability formula")
+    st.write(
+        "Financial Survivability is intentionally different from ROI. ROI asks whether the long-term payoff looks strong; "
+        "Survivability asks whether the student can realistically handle the college financially now. The score is roughly "
+        "55% yearly budget fit, 20% debt stress, 15% graduation probability, and 10% estimate trust. If a school is far above "
+        "the entered yearly budget, the score is capped so high earnings cannot hide an unaffordable price."
+    )
 
     st.markdown("##### Data sources")
     st.write(
@@ -2317,6 +2585,8 @@ def show_college_browser(data, visible_rows=15):
             "display_name",
             "state",
             "risk_label",
+            "financial_survivability_score",
+            "financial_survivability_label",
             "cost_after_aid",
             "annual_budget_gap",
             "roi_score",
@@ -2344,6 +2614,8 @@ def show_college_browser(data, visible_rows=15):
             "display_name": "College name",
             "state": "State",
             "risk_label": "Budget/Value Status",
+            "financial_survivability_score": "Financial Survivability",
+            "financial_survivability_label": "Survivability Label",
             "cost_after_aid": "Yearly Estimated Cost After Aid",
             "annual_budget_gap": "Yearly Over/Under Budget",
             "roi_score": "Future ROI Score",
@@ -2369,44 +2641,59 @@ def show_college_browser(data, visible_rows=15):
     table["Grad Rate"] = table["Grad Rate"] * 100
     table["Debt / Early Earnings"] = table["Debt / Early Earnings"] * 100
     show_budget_gap = profile["annual_family_budget"] > 0
+    show_detailed_columns = st.toggle(
+        "Show detailed table columns",
+        value=False,
+        help="Turn this on for earnings, debt, confidence, data coverage, and program details. Off keeps the explorer focused.",
+    )
     column_order = [
         "College name",
         "State",
+        "Financial Survivability",
+        "Survivability Label",
         "Need Value Score",
         "Budget/Value Status",
         "Yearly Estimated Cost After Aid",
         "Yearly Over/Under Budget",
         "Future ROI Score",
-        "ROI Rating",
-        "Earnings 10 Years Later",
-        "Earnings After Grad",
         "Grad Rate",
-        "Debt / Early Earnings",
-        "Debt",
-        "Confidence",
-        "Missing Data Warning",
-        "Data Coverage",
     ]
+    if show_detailed_columns:
+        column_order.extend([
+            "ROI Rating",
+            "Earnings 10 Years Later",
+            "Earnings After Grad",
+            "Debt / Early Earnings",
+            "Debt",
+            "Confidence",
+            "Missing Data Warning",
+            "Data Coverage",
+        ])
     if not show_budget_gap:
         column_order.remove("Yearly Over/Under Budget")
     if show_program_columns:
         column_order = [
             "College name",
             "State",
+            "Financial Survivability",
+            "Survivability Label",
             "Major-Adjusted Value",
             "Budget/Value Status",
             "Yearly Estimated Cost After Aid",
             "Yearly Over/Under Budget",
             "Program Value",
-            "Program Match",
-            "Focus Match",
-            "Program Earnings",
-            "Program Debt",
             "Future ROI Score",
-            "Confidence",
-            "Missing Data Warning",
-            "Data Coverage",
         ]
+        if show_detailed_columns:
+            column_order.extend([
+                "Program Match",
+                "Focus Match",
+                "Program Earnings",
+                "Program Debt",
+                "Confidence",
+                "Missing Data Warning",
+                "Data Coverage",
+            ])
         if not show_budget_gap:
             column_order.remove("Yearly Over/Under Budget")
     visible_count = min(len(table), visible_rows)
@@ -2427,6 +2714,16 @@ def show_college_browser(data, visible_rows=15):
             ),
             "State": st.column_config.TextColumn(help="U.S. state where the college is located."),
             "Budget/Value Status": st.column_config.TextColumn(help=TOOLTIPS["risk_label"]),
+            "Financial Survivability": st.column_config.ProgressColumn(
+                "Financial Survivability (0-100)",
+                help=TOOLTIPS["financial_survivability"],
+                format="%.0f",
+                min_value=0,
+                max_value=100,
+            ),
+            "Survivability Label": st.column_config.TextColumn(
+                help="Plain-English label for whether this school looks financially survivable for the profile."
+            ),
             "Yearly Estimated Cost After Aid": st.column_config.NumberColumn("Yearly Estimated Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
             "Yearly Over/Under Budget": st.column_config.NumberColumn("Yearly Over/Under Budget", format="$%d", help=TOOLTIPS["budget_gap"]),
             "Future ROI Score": st.column_config.ProgressColumn(
@@ -2530,6 +2827,29 @@ def show_why_project_page():
         columns=["Step", "Purpose"],
     )
     st.dataframe(why_table, width="stretch", hide_index=True)
+
+    st.markdown("##### Example use cases")
+    case_table = pd.DataFrame(
+        [
+            [
+                "Low-income, high-aid student",
+                "Needs schools that are affordable now, not just prestigious later.",
+                "Income-band net price, budget gap, Financial Survivability, official calculator verification.",
+            ],
+            [
+                "Full-pay family",
+                "May not receive need aid, so full cost matters more than average net price.",
+                "No-need-aid mode, Future ROI Score, Major-Adjusted Value.",
+            ],
+            [
+                "Budget-limited out-of-state applicant",
+                "A high-ROI school can still be financially unsafe if the yearly gap is too large.",
+                "Home-state residency logic, Survivability caps, what-if scholarship simulator.",
+            ],
+        ],
+        columns=["Student type", "Decision problem", "What the app checks"],
+    )
+    st.dataframe(case_table, width="stretch", hide_index=True)
 
     st.info(
         "This is a planning aid, not a financial-aid estimator. Official school calculators and aid letters "
@@ -2829,7 +3149,12 @@ with st.sidebar:
     scenario_df = add_need_value_score(scenario_df, profile_settings)
     scenario_df = add_program_focus(scenario_df, programs_updated_at, profile_settings)
     scenario_df = add_estimate_confidence(scenario_df, profile_settings)
-    sort_column = "focus_adjusted_score" if profile_settings["academic_focus"] else "need_value_score"
+    if profile_settings["annual_family_budget"] > 0:
+        sort_column = "financial_survivability_score"
+    elif profile_settings["academic_focus"]:
+        sort_column = "focus_adjusted_score"
+    else:
+        sort_column = "need_value_score"
     scenario_df = scenario_df.sort_values(sort_column, ascending=False, na_position="last")
     only_program_matches = False
     if profile_settings["academic_focus"]:
@@ -2971,7 +3296,14 @@ col1.metric(
     help=f"{TOOLTIPS['colleges']} Cleaned schools: {len(df):,}. Cost scenarios: {len(scenario_df):,}.",
 )
 col2.metric("Median Yearly Est. Cost After Aid", money(filtered["cost_after_aid"].median()), help=TOOLTIPS["cost_after_aid"])
-col3.metric("Median Earnings After Grad", money(filtered["earnings_after_grad"].median()), help="Median earnings 1 year after graduation when available.")
+if profile_settings["annual_family_budget"] > 0:
+    col3.metric(
+        "Median Financial Survivability",
+        number(filtered["financial_survivability_score"].median()),
+        help=TOOLTIPS["financial_survivability"],
+    )
+else:
+    col3.metric("Median Earnings After Grad", money(filtered["earnings_after_grad"].median()), help="Median earnings 1 year after graduation when available.")
 col4.metric("Median Earnings 10 Years Later", money(filtered["earnings_10yr_used"].median()), help="Median earnings 10 years after entry when available.")
 
 if not filtered.empty:
@@ -2982,20 +3314,19 @@ if not filtered.empty:
 plain_caption(
     f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
     "Costs shown in the app are yearly unless a label explicitly says 4-year. "
-    "Need Value uses both near-term earnings after graduation and longer-term earnings 10 years later. "
-    "Public colleges may appear as separate in-state and out-of-state scenarios; out-of-state after-aid cost is estimated from the tuition difference. "
+    "Financial Survivability asks whether the college is realistic for the entered budget and debt comfort. "
+    "Need Value and Future ROI use both near-term earnings after graduation and longer-term earnings 10 years later. "
     f"{describe_score_mode(profile_settings)}"
 )
 
-why_tab, profile_tab, explorer_tab, selected_tab, validation_tab, methodology_tab, testing_tab, roadmap_tab = st.tabs(
+why_tab, profile_tab, explorer_tab, selected_tab, validation_tab, methodology_tab, roadmap_tab = st.tabs(
     [
         "Why This Project",
         "Personal Profile",
         "Explorer",
         "Selected Schools",
-        "Validation",
+        "Validation & Testing",
         "Methodology",
-        "User Testing",
         "Build Roadmap",
     ]
 )
@@ -3009,7 +3340,7 @@ with profile_tab:
 with explorer_tab:
     st.subheader("College ROI Explorer")
     st.caption(
-        "Sorted by the clearest value score for your profile. If you entered an Academic focus, the table uses Major-Adjusted Value; otherwise it uses Need Value Score. Filters are in the left sidebar under College Filters."
+        "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Need Value Score."
     )
     header_col, search_col = st.columns([1, 2])
     header_col.subheader("College")
@@ -3066,12 +3397,11 @@ with selected_tab:
 
 with validation_tab:
     show_validation_page(scenario_df)
+    st.divider()
+    show_user_testing_page()
 
 with methodology_tab:
     show_methodology_page()
-
-with testing_tab:
-    show_user_testing_page()
 
 with roadmap_tab:
     show_build_roadmap_page()
