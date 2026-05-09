@@ -1726,6 +1726,43 @@ def show_personal_profile_page():
     if preset_cols[3].button("Low debt first", width="stretch"):
         set_profile_preset(7, 4, 10, 5, 7)
 
+    st.markdown("##### Admissions Profile")
+    st.caption(
+        "Optional. These inputs only change admissions realism labels like reach, target, and likely. They do not change financial scores."
+    )
+    admissions_cols = st.columns(4)
+    st.session_state["unweighted_gpa"] = admissions_cols[0].number_input(
+        "Unweighted GPA",
+        min_value=0.0,
+        max_value=4.0,
+        value=float(st.session_state.get("unweighted_gpa", 0.0)),
+        step=0.01,
+        help="Use 0 if you do not want to include GPA. This is a rough signal, not an admissions prediction.",
+    )
+    st.session_state["sat_score"] = admissions_cols[1].number_input(
+        "SAT score",
+        min_value=0,
+        max_value=1600,
+        value=int(st.session_state.get("sat_score", 0)),
+        step=10,
+        help="Use 0 if not submitted or unknown. If both SAT and ACT are entered, SAT is used.",
+    )
+    st.session_state["act_score"] = admissions_cols[2].number_input(
+        "ACT score",
+        min_value=0,
+        max_value=36,
+        value=int(st.session_state.get("act_score", 0)),
+        step=1,
+        help="Use 0 if not submitted or unknown.",
+    )
+    st.session_state["ec_score"] = admissions_cols[3].slider(
+        "EC strength",
+        0,
+        10,
+        int(st.session_state.get("ec_score", 0)),
+        help="Rough self-rating from 0 to 10 for activities, leadership, awards, work, service, projects, or responsibilities.",
+    )
+
     col1, col2 = st.columns(2)
     with col1:
         st.session_state["home_state"] = st.selectbox(
@@ -1801,43 +1838,6 @@ def show_personal_profile_page():
             10,
             st.session_state.get("in_state_importance", 0),
             help="Only affects the score when you choose a home state.",
-        )
-
-        st.markdown("##### Admissions profile")
-        st.caption(
-            "Optional. These inputs only change admissions realism labels like reach, target, and likely. They do not change financial scores."
-        )
-        st.session_state["unweighted_gpa"] = st.number_input(
-            "Unweighted GPA",
-            min_value=0.0,
-            max_value=4.0,
-            value=float(st.session_state.get("unweighted_gpa", 0.0)),
-            step=0.01,
-            help="Use 0 if you do not want to include GPA. This is a rough signal, not an admissions prediction.",
-        )
-        test_cols = st.columns(2)
-        st.session_state["sat_score"] = test_cols[0].number_input(
-            "SAT score",
-            min_value=0,
-            max_value=1600,
-            value=int(st.session_state.get("sat_score", 0)),
-            step=10,
-            help="Use 0 if not submitted or unknown. If both SAT and ACT are entered, SAT is used.",
-        )
-        st.session_state["act_score"] = test_cols[1].number_input(
-            "ACT score",
-            min_value=0,
-            max_value=36,
-            value=int(st.session_state.get("act_score", 0)),
-            step=1,
-            help="Use 0 if not submitted or unknown.",
-        )
-        st.session_state["ec_score"] = st.slider(
-            "Extracurricular strength estimate",
-            0,
-            10,
-            int(st.session_state.get("ec_score", 0)),
-            help="Rough self-rating from 0 to 10 for activities, leadership, awards, work, service, projects, or responsibilities.",
         )
 
     st.markdown("##### What should matter most?")
