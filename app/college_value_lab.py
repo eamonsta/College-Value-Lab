@@ -140,6 +140,47 @@ FOCUS_CIP_PREFIXES = {
     "statistics": ("2705",),
 }
 
+FOCUS_TITLE_RULES = {
+    "data science": {
+        "required_any": (
+            "data",
+            "analytics",
+            "analytic",
+            "information",
+            "informatics",
+            "computer",
+            "computing",
+            "statistics",
+            "statistical",
+            "machine",
+            "artificial",
+        ),
+        "blocked_any": (
+            "plant",
+            "animal",
+            "crop",
+            "soil",
+            "food",
+            "agriculture",
+            "agricultural",
+            "environmental",
+            "natural resources",
+        ),
+    },
+    "pre med": {
+        "required_any": (
+            "biology",
+            "biological",
+            "biomedical",
+            "neuroscience",
+            "health",
+            "chemistry",
+            "biochemistry",
+        ),
+        "blocked_any": ("plant", "animal", "agriculture", "food", "soil"),
+    },
+}
+
 COMMON_ACADEMIC_FOCUSES = [
     "",
     "accounting",
@@ -460,15 +501,19 @@ def personalized_admissions_fit(admission_rate, profile):
     if pd.isna(strength):
         return base_label
 
-    # Ultra-selective colleges stay reaches for everyone; strong stats only reduce how far the reach is.
-    if admission_rate <= 0.07:
+    # Ultra-selective colleges stay far reaches for everyone; strong stats only reduce how far the reach is.
+    if admission_rate <= 0.05:
         if strength >= 90:
-            return "Reach"
-        if strength >= 75:
+            return "Far reach"
+        return "Extreme reach"
+    if admission_rate <= 0.08:
+        if strength >= 95:
+            return "Far reach"
+        if strength >= 78:
             return "Far reach"
         return "Extreme reach"
     if admission_rate <= 0.12:
-        if strength >= 92:
+        if strength >= 95:
             return "Reach"
         if strength >= 78:
             return "Far reach"
@@ -1324,6 +1369,19 @@ def program_focus_matches(program_data_updated_at, focus_query):
     if cip_prefixes:
         programs = programs[programs["cip_code"].astype(str).str.startswith(cip_prefixes, na=False)]
 
+    title_rules = FOCUS_TITLE_RULES.get(clean_query)
+    if title_rules:
+        required_any = title_rules.get("required_any", ())
+        blocked_any = title_rules.get("blocked_any", ())
+
+        def title_allowed(text):
+            clean_title = normalize_search_text(text)
+            has_required = any(term in clean_title for term in required_any)
+            has_blocked = any(term in clean_title for term in blocked_any)
+            return has_required and not has_blocked
+
+        programs = programs[programs["program_title"].apply(title_allowed)]
+
     def match_score(text):
         clean_title = normalize_search_text(text)
         title_tokens = clean_title.split()
@@ -1339,7 +1397,9 @@ def program_focus_matches(program_data_updated_at, focus_query):
         return sum(token_scores) / len(token_scores)
 
     programs["program_match_score"] = programs["program_title"].apply(match_score)
-    score_floor = 0 if cip_prefixes else 0.75
+    score_floor = 0.35 if cip_prefixes else 0.75
+    if title_rules:
+        score_floor = 0.20
     programs = programs[programs["program_match_score"] >= score_floor]
     if programs.empty:
         return programs
@@ -2277,6 +2337,10 @@ def show_selected_schools_page(scenario_data):
 
     st.caption(
         "One shortlist table. Public-data columns refresh automatically; you edit only status, personal fit, official calculator estimate, and notes."
+    )
+    st.info(
+        "You can edit only four planning fields here: Status, Personal Fit, Yearly Official Calculator Estimate, and Notes. "
+        "The objective fields such as cost, scores, admissions fit, earnings, debt, and location are locked because they come from the app's data/model."
     )
     st.info(
         "After you open a school's official calculator, enter its yearly result in Yearly Official Calculator Estimate. Do not enter a four-year total. "
@@ -3478,6 +3542,26 @@ with st.sidebar:
     selected_regions = st.multiselect("Region", regions, default=[])
     degrees = sorted(scenario_df["predominant_degree"].dropna().unique())
     selected_degrees = st.multiselect("Predominant degree", degrees, default=["Bachelor"])
+    admissions_fit_options = [
+        "Likely",
+        "Target",
+        "Target/reach",
+        "Reach",
+        "Far reach",
+        "Extreme reach",
+        "Admissions data unavailable",
+    ]
+    available_admissions_fits = [
+        label
+        for label in admissions_fit_options
+        if label in set(scenario_df["admissions_category"].dropna())
+    ]
+    selected_admissions_fits = st.multiselect(
+        "Admissions fit",
+        available_admissions_fits,
+        default=[],
+        help="Filter by rough admissions realism for your GPA/test/EC profile. This is not an admission probability.",
+    )
 
     st.caption("Ownership")
     ownerships = sorted(scenario_df["ownership"].dropna().unique())
@@ -3580,6 +3664,8 @@ if selected_degrees:
     filtered = filtered[filtered["predominant_degree"].isin(selected_degrees)]
 if selected_residencies:
     filtered = filtered[filtered["residency"].isin(selected_residencies)]
+if selected_admissions_fits:
+    filtered = filtered[filtered["admissions_category"].isin(selected_admissions_fits)]
 if only_program_matches:
     filtered = filtered[filtered["program_match"].notna()]
 filtered = filtered[
