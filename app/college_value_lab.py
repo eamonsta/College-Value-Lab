@@ -396,6 +396,20 @@ def roi_rating(score):
     return "Weak"
 
 
+def admissions_category(admission_rate):
+    if pd.isna(admission_rate):
+        return "Admissions data unavailable"
+    if admission_rate <= 0.10:
+        return "Extreme reach"
+    if admission_rate <= 0.25:
+        return "Reach"
+    if admission_rate <= 0.50:
+        return "Selective"
+    if admission_rate <= 0.75:
+        return "Moderately selective"
+    return "Less selective"
+
+
 def risk_label(row, profile):
     cost = row["cost_after_aid"]
     graduation = row["graduation_rate"]
@@ -631,6 +645,7 @@ TOOLTIPS = {
     "risk_label": "Plain-English financial status based on budget fit, payoff, debt, graduation rate, and data completeness.",
     "estimate_confidence": "Trust level for the app's estimate. High means stronger public cost/outcome/program evidence and a calculator link; Low means fallback data or missing key fields.",
     "net_price_calculator": "Official college net price calculator when College Scorecard reports a link. These school calculators use institutional data and should be checked before making application or enrollment decisions.",
+    "admissions_category": "Admissions selectivity based on reported admission rate. This is not a personalized admission chance; it helps you avoid building a list made only of reach schools.",
 }
 
 
@@ -812,6 +827,8 @@ def affordability_verdict(yearly_gap, yearly_budget):
 def selected_school_next_step(row, profile):
     if pd.isna(row.get("Official Calculator Estimate")):
         return "Run official calculator"
+    if row.get("Admissions Category") in ("Extreme reach", "Reach"):
+        return "Keep, but add safer admissions options"
     if profile["annual_family_budget"] <= 0:
         return "Add yearly budget"
     if row["Affordability Verdict"] == "Large gap":
@@ -1060,6 +1077,7 @@ def add_need_value_score(data, profile=None):
         axis=1,
     )
     data["debt_safety_label"] = data["debt_to_earnings_after_grad"].apply(debt_safety_label)
+    data["admissions_category"] = data["admission_rate"].apply(admissions_category)
     data["risk_label"] = data.apply(lambda row: risk_label(row, profile), axis=1)
     return data
 
@@ -1374,7 +1392,8 @@ def show_college_profile(row):
     col5, col6, col7 = st.columns(3)
     col5.metric("Graduation Rate", pct(row["graduation_rate"]), help=TOOLTIPS["graduation_rate"])
     col6.metric("On-Time Completion", pct(row["on_time_completion_rate"]), help=TOOLTIPS["on_time_completion_rate"])
-    col7.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
+    col7.metric("Admissions Category", row["admissions_category"], help=TOOLTIPS["admissions_category"])
+    st.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
     plain_note(plain_english_summary(row, get_profile_settings()))
     if pd.notna(row.get("program_match")):
         st.markdown("##### Program Outcomes")
@@ -1511,6 +1530,7 @@ def add_selected_school(row, show_message=True):
             "Estimate Trust Level": row.get("estimate_confidence"),
             "Estimate Trust Score": row.get("estimate_confidence_score"),
             "Missing Data Warning": row.get("data_warning"),
+            "Admissions Category": row.get("admissions_category"),
             "Calculator URL": row.get("net_price_calculator_url"),
             "Official Calculator Estimate": None,
             "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
@@ -1553,6 +1573,7 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Estimate Trust Level": row.get("estimate_confidence"),
                 "Estimate Trust Score": row.get("estimate_confidence_score"),
                 "Missing Data Warning": row.get("data_warning"),
+                "Admissions Category": row.get("admissions_category"),
                 "Calculator URL": row.get("net_price_calculator_url"),
                 "Official Calculator Estimate": saved.get("Official Calculator Estimate"),
                 "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
@@ -1886,6 +1907,8 @@ def show_selected_schools_page(scenario_data):
     )
     if "Missing Data Warning" not in selected_table.columns:
         selected_table["Missing Data Warning"] = "Enough public data"
+    if "Admissions Category" not in selected_table.columns:
+        selected_table["Admissions Category"] = "Admissions data unavailable"
     if "Calculator URL" not in selected_table.columns:
         selected_table["Calculator URL"] = None
     if "Official Calculator Estimate" not in selected_table.columns:
@@ -2031,6 +2054,7 @@ def show_selected_schools_page(scenario_data):
         "Next Step",
         "Financial Survivability",
         "Survivability Label",
+        "Admissions Category",
         "Affordability Verdict",
         "Cost Used In Decision",
         "Official Calculator Estimate",
@@ -2048,6 +2072,7 @@ def show_selected_schools_page(scenario_data):
             "Decision Score",
             "Financial Survivability",
             "Survivability Label",
+            "Admissions Category",
             "Budget/Value Status",
             "Affordability Verdict",
             "Cost Used In Decision",
@@ -2095,6 +2120,7 @@ def show_selected_schools_page(scenario_data):
             "Decision Score",
             "Financial Survivability",
             "Survivability Label",
+            "Admissions Category",
             "Need Value Score",
             "Major-Adjusted Value",
             "Focus Match",
@@ -2141,6 +2167,9 @@ def show_selected_schools_page(scenario_data):
             "Survivability Label": st.column_config.TextColumn(
                 "Survivability Label",
                 help="Plain-English interpretation of Financial Survivability.",
+            ),
+            "Admissions Category": st.column_config.TextColumn(
+                help=TOOLTIPS["admissions_category"],
             ),
             "Estimated Cost After Aid": st.column_config.NumberColumn("App's Yearly Estimated Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
             "Official Calculator Estimate": st.column_config.NumberColumn(
@@ -2464,6 +2493,7 @@ def show_methodology_page():
             ["Future ROI Score", "Standardized future payoff score.", "0-100, higher is better", "Percentile rank of the raw ROI Index compared with other rows. 85+ excellent, 70-84 strong, 50-69 mixed, under 50 weak."],
             ["Raw ROI Index", "Transparent formula behind ROI Score.", "ratio", "(10-year earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate."],
             ["Program Value", "Major/focus-specific value signal when field-of-study data exists.", "0-100", "Program earnings, program ROI, and lower program debt."],
+            ["Admissions Category", "Selectivity warning so students do not build a list only from reach schools.", "label", "Reported admission rate grouped into less selective, moderately selective, selective, reach, and extreme reach."],
             ["Budget/Value Status", "Plain-English risk category.", "label", "Combines affordability, debt, graduation, payoff, and missing-data warnings."],
             ["Decision Score", "Shortlist helper only.", "0-100", "Normally 70% data score and 30% personal fit. If the user enters an official calculator estimate, the score uses 50% data score, 30% calculator cost fit, and 20% personal fit."],
         ],
@@ -2527,6 +2557,7 @@ def show_methodology_page():
         """
 - This is not a financial-aid offer and cannot know merit scholarships.
 - Program outcomes are historical medians, not predictions for a specific student.
+- Admissions Category is not a personalized chance of admission.
 - Major choice, location, internships, family support, and graduate school can change outcomes a lot.
 - Some fields are privacy-suppressed or missing.
 - The score is meant to support comparison, not replace college research or financial-aid letters.
@@ -2605,6 +2636,7 @@ def show_college_browser(data, visible_rows=15):
             "estimate_confidence",
             "estimate_confidence_score",
             "data_warning",
+            "admissions_category",
             "need_value_score",
             "data_coverage",
         ]
@@ -2634,6 +2666,7 @@ def show_college_browser(data, visible_rows=15):
             "estimate_confidence": "Confidence",
             "estimate_confidence_score": "Confidence Score",
             "data_warning": "Missing Data Warning",
+            "admissions_category": "Admissions Category",
             "need_value_score": "Need Value Score",
             "data_coverage": "Data Coverage",
         }
@@ -2649,10 +2682,12 @@ def show_college_browser(data, visible_rows=15):
     column_order = [
         "College name",
         "State",
-        "Financial Survivability",
-        "Survivability Label",
-        "Need Value Score",
+            "Financial Survivability",
+            "Survivability Label",
+            "Admissions Category",
+            "Need Value Score",
         "Budget/Value Status",
+        "Admissions Category",
         "Yearly Estimated Cost After Aid",
         "Yearly Over/Under Budget",
         "Future ROI Score",
@@ -2679,6 +2714,7 @@ def show_college_browser(data, visible_rows=15):
             "Survivability Label",
             "Major-Adjusted Value",
             "Budget/Value Status",
+            "Admissions Category",
             "Yearly Estimated Cost After Aid",
             "Yearly Over/Under Budget",
             "Program Value",
@@ -2714,6 +2750,7 @@ def show_college_browser(data, visible_rows=15):
             ),
             "State": st.column_config.TextColumn(help="U.S. state where the college is located."),
             "Budget/Value Status": st.column_config.TextColumn(help=TOOLTIPS["risk_label"]),
+            "Admissions Category": st.column_config.TextColumn(help=TOOLTIPS["admissions_category"]),
             "Financial Survivability": st.column_config.ProgressColumn(
                 "Financial Survivability (0-100)",
                 help=TOOLTIPS["financial_survivability"],
