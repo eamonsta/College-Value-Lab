@@ -1344,6 +1344,17 @@ def add_program_focus(data, program_data_updated_at, profile):
     return data
 
 
+@st.cache_data(show_spinner="Scoring colleges for this profile...")
+def prepare_scenario_data(data_updated_at, program_data_updated_at, schema_version, program_schema_version, profile_items):
+    profile = dict(profile_items)
+    data = load_data(data_updated_at, schema_version)
+    scenarios = build_cost_scenarios(data, profile)
+    scenarios = add_need_value_score(scenarios, profile)
+    scenarios = add_program_focus(scenarios, program_data_updated_at, profile)
+    scenarios = add_estimate_confidence(scenarios, profile)
+    return scenarios
+
+
 def show_college_profile(row):
     st.markdown(f"#### {row['display_name']}")
     st.caption(f"{row['ownership']} · {row['city']}, {row['state']} · {row['residency']} cost scenario")
@@ -1844,6 +1855,81 @@ def show_what_if_simulator(selected_table, profile):
         )
 
 
+def balanced_shortlist_warnings(selected_table, profile):
+    warning_rows = []
+    school_count = len(selected_table)
+    if school_count == 0:
+        return
+
+    reach_count = int(selected_table["Admissions Category"].isin(["Extreme reach", "Reach"]).sum())
+    selective_count = int(selected_table["Admissions Category"].isin(["Selective", "Moderately selective", "Less selective"]).sum())
+    within_budget_count = int((selected_table["Affordability Verdict"] == "Within budget").sum())
+    risky_cost_count = int(selected_table["Survivability Label"].isin(["Risky stretch", "Likely unsafe"]).sum())
+    calculator_count = int(selected_table["Official Calculator Estimate"].notna().sum())
+    low_trust_count = int(selected_table["Estimate Trust Level"].eq("Low").sum())
+    focus_unmatched_count = 0
+    if profile["academic_focus"] and "Focus Match" in selected_table.columns:
+        focus_unmatched_count = int(selected_table["Focus Match"].ne("Matched program").sum())
+
+    if school_count < 5:
+        warning_rows.append((
+            "List is still small",
+            f"You have {school_count} school(s). A useful shortlist usually needs more options before comparing tradeoffs.",
+            "Add a few financial safeties, realistic options, and reach schools before trusting the ranking.",
+        ))
+    if school_count >= 3 and reach_count / school_count >= 0.70:
+        warning_rows.append((
+            "Too reach-heavy",
+            f"{reach_count} of {school_count} selected schools are reach or extreme-reach schools by admission rate.",
+            "Keep them if you like them, but add less selective schools that are also financially survivable.",
+        ))
+    if school_count >= 3 and selective_count == 0:
+        warning_rows.append((
+            "No admissions balance",
+            "Every selected school is currently categorized as a reach, extreme reach, or missing admissions data.",
+            "Add schools with more realistic admission rates so the list is not only aspirational.",
+        ))
+    if profile["annual_family_budget"] > 0 and within_budget_count == 0:
+        warning_rows.append((
+            "No clear budget fit",
+            "None of the selected schools are currently within the yearly family budget.",
+            "Run official calculators, then add at least one school that fits without a major aid surprise.",
+        ))
+    if profile["annual_family_budget"] > 0 and school_count >= 3 and risky_cost_count / school_count >= 0.50:
+        warning_rows.append((
+            "Financial risk is high",
+            f"{risky_cost_count} of {school_count} selected schools are risky stretches or likely unsafe for this budget.",
+            "Use the what-if simulator, compare lower-cost schools, and do not rely on uncertain scholarships.",
+        ))
+    if calculator_count == 0:
+        warning_rows.append((
+            "Official calculator step missing",
+            "No selected school has an official net price calculator estimate entered yet.",
+            "Run calculators for your top schools and enter the yearly result so the comparison gets more trustworthy.",
+        ))
+    if low_trust_count > 0:
+        warning_rows.append((
+            "Some estimates are low confidence",
+            f"{low_trust_count} selected school(s) have low public-data confidence.",
+            "Treat those rows as research leads, not final answers.",
+        ))
+    if focus_unmatched_count > 0:
+        warning_rows.append((
+            "Major data gaps",
+            f"{focus_unmatched_count} selected school(s) do not have a clean public program match for {profile['academic_focus']}.",
+            "Check department outcomes, career reports, and program pages manually before trusting the major-adjusted score.",
+        ))
+
+    if warning_rows:
+        st.markdown("##### Shortlist Health Check")
+        for title, issue, action in warning_rows:
+            st.warning(f"**{title}:** {issue} **Next move:** {action}")
+    else:
+        st.success(
+            "Shortlist health check: this list has a healthier mix of admissions realism, affordability, calculator progress, and data quality."
+        )
+
+
 def show_selected_schools_page(scenario_data):
     st.subheader("Selected Schools")
     selected = st.session_state.get("selected_schools", {})
@@ -2029,6 +2115,8 @@ def show_selected_schools_page(scenario_data):
     action_cols = st.columns(2)
     action_cols[0].metric("Schools Still Needing Official Calculator", calculators_needed, help="Selected schools where you have not entered an official net price calculator result yet.")
     action_cols[1].metric("Schools Within Your Yearly Budget", within_budget, help="Selected schools at or below the yearly amount your family can actually pay, using the cost used for decisions.")
+
+    balanced_shortlist_warnings(selected_table, profile)
 
     st.caption(
         "One shortlist table. Public-data columns refresh automatically; you edit only status, personal fit, official calculator estimate, and notes."
@@ -3171,7 +3259,13 @@ for index, step in enumerate([
 df = load_data(DATA_PATH.stat().st_mtime, DATA_SCHEMA_VERSION)
 programs_updated_at = PROGRAM_DATA_PATH.stat().st_mtime if PROGRAM_DATA_PATH.exists() else None
 profile_settings = get_profile_settings()
-scenario_df = build_cost_scenarios(df, profile_settings)
+scenario_df = prepare_scenario_data(
+    DATA_PATH.stat().st_mtime,
+    programs_updated_at,
+    DATA_SCHEMA_VERSION,
+    PROGRAM_SCHEMA_VERSION,
+    tuple(profile_settings.items()),
+)
 
 with st.sidebar:
     st.header("College Filters")
@@ -3183,9 +3277,6 @@ with st.sidebar:
         st.caption(
             f"Using {profile_settings['home_state']} as your home state: public colleges in {profile_settings['home_state']} show in-state cost; public colleges elsewhere show out-of-state cost."
         )
-    scenario_df = add_need_value_score(scenario_df, profile_settings)
-    scenario_df = add_program_focus(scenario_df, programs_updated_at, profile_settings)
-    scenario_df = add_estimate_confidence(scenario_df, profile_settings)
     if profile_settings["annual_family_budget"] > 0:
         sort_column = "financial_survivability_score"
     elif profile_settings["academic_focus"]:
