@@ -828,8 +828,8 @@ TOOLTIPS = {
     "need_value_score": "Personalized 0-100 value score for cost-sensitive students. Higher is better. It uses estimated yearly cost after aid, budget fit, debt, graduation rate, earnings, and profile settings.",
     "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It blends Need Value with major/program-level earnings and debt when available.",
     "financial_survivability": "Personalized 0-100 safety score asking: can this student realistically afford and finish this college without taking on unsafe debt? It uses yearly budget fit, debt stress, graduation rate, and estimate trust.",
-    "roi_score": "0-100 payoff score compared with other rows in this dataset. Higher is better. 85+ is excellent, 70-84 strong, 50-69 mixed/above average, 30-49 weak, below 30 poor.",
-    "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is kept for transparency; ROI Score is easier to interpret.",
+    "roi_score": "0-100 payoff score compared with other rows in this dataset. It uses reported early earnings and 10-year earnings, not lifetime earnings. Higher is better.",
+    "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is not lifetime earnings.",
     "estimated_4yr_net_cost": "Estimated total after-aid cost for four years.",
     "student_size": "Undergraduate student enrollment reported by College Scorecard.",
     "budget_gap": "Estimated yearly cost after aid minus the yearly amount your family can actually pay. Negative means under budget; positive means above budget.",
@@ -1645,12 +1645,21 @@ def show_college_profile(row):
         f"Score interpretation: {score_band_label(score_to_explain)}. "
         "Use the official calculator before treating this as a final affordability answer."
     )
+    if profile["academic_focus"]:
+        plain_note(
+            f"Major effect: because you entered {profile['academic_focus']}, this detail view shows Major-Adjusted Value when matching program data exists. "
+            "Future ROI Score still uses school-wide earnings; Program Outcomes below show the major/focus-specific earnings and debt data."
+        )
+    else:
+        plain_note(
+            "Major effect: Future ROI Score uses school-wide earnings. Enter an Academic focus in Personal Profile to add major/focus-specific program data when it is available."
+        )
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Yearly Full Cost Before Aid", money(row["cost_before_aid"]), help=TOOLTIPS["cost_before_aid"])
     col2.metric("Yearly Estimated Cost After Aid", money(row["cost_after_aid"]), help=TOOLTIPS["cost_after_aid"])
     col3.metric("Earnings After Grad", money(row["earnings_after_grad"]), help="Median earnings 1 year after graduation when available.")
-    col4.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available.")
+    col4.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available. This is not lifetime earnings.")
 
     merit_cols = st.columns(3)
     merit_cols[0].metric("Merit Aid Signal", row["merit_aid_signal"], help=TOOLTIPS["merit_aid"])
@@ -3064,7 +3073,7 @@ def show_cost_earnings_chart(data):
     chart_data = data.rename(
         columns={
             "estimated_4yr_after_aid_cost": "Estimated 4-Year Cost After Aid ($)",
-            "earnings_10yr_used": "Median Earnings 10 Years Later ($)",
+            "earnings_10yr_used": "Median Earnings 10 Years After Entry ($)",
             "graduation_rate": "Graduation Rate",
             "need_value_score": "Need Value Score",
             "display_name": "College",
@@ -3080,8 +3089,8 @@ def show_cost_earnings_chart(data):
                 axis=alt.Axis(format="$,.0f", title="Estimated 4-Year Cost After Aid"),
             ),
             y=alt.Y(
-                "Median Earnings 10 Years Later ($):Q",
-                axis=alt.Axis(format="$,.0f", title="Median Earnings 10 Years Later"),
+                "Median Earnings 10 Years After Entry ($):Q",
+                axis=alt.Axis(format="$,.0f", title="Median Earnings 10 Years After Entry"),
             ),
             color=alt.Color(
                 "Need Value Score:Q",
@@ -3092,7 +3101,7 @@ def show_cost_earnings_chart(data):
                 "College:N",
                 "state:N",
                 alt.Tooltip("Estimated 4-Year Cost After Aid ($):Q", format="$,.0f"),
-                alt.Tooltip("Median Earnings 10 Years Later ($):Q", format="$,.0f"),
+                alt.Tooltip("Median Earnings 10 Years After Entry ($):Q", format="$,.0f"),
                 alt.Tooltip("Graduation Rate:Q", format=".1%"),
                 alt.Tooltip("Need Value Score:Q", format=".0f"),
             ],
@@ -3457,9 +3466,15 @@ def inject_lab_theme():
         padding-top: 1.75rem;
         padding-bottom: 4rem;
     }
+    html, body, [class*="css"] {
+        font-size: 16px;
+    }
     h1, h2, h3 {
         color: #f8fbff;
         letter-spacing: 0;
+    }
+    h2, h3 {
+        margin-top: 1rem;
     }
     [data-testid="stMarkdownContainer"] p,
     [data-testid="stMarkdownContainer"] li,
@@ -3468,6 +3483,7 @@ def inject_lab_theme():
         letter-spacing: 0;
         word-break: normal;
         overflow-wrap: break-word;
+        line-height: 1.55;
     }
     .plain-text {
         margin: 0 0 0.85rem 0;
@@ -3480,7 +3496,7 @@ def inject_lab_theme():
     }
     .plain-caption {
         margin: 0.15rem 0 0.65rem 0;
-        color: rgba(219, 233, 245, 0.68);
+        color: rgba(235, 245, 255, 0.84);
         line-height: 1.45;
         letter-spacing: 0;
         word-break: normal;
@@ -3511,7 +3527,7 @@ def inject_lab_theme():
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
     }
     .summary-title {
-        color: rgba(201, 226, 244, 0.74);
+        color: rgba(226, 241, 252, 0.88);
         font-size: 0.82rem;
         font-weight: 800;
         text-transform: uppercase;
@@ -3536,7 +3552,7 @@ def inject_lab_theme():
         letter-spacing: 0;
     }
     .summary-help {
-        color: rgba(219, 233, 245, 0.62);
+        color: rgba(226, 241, 252, 0.78);
         font-size: 0.82rem;
         line-height: 1.35;
         letter-spacing: 0;
@@ -3555,7 +3571,7 @@ def inject_lab_theme():
     [data-testid="stAlert"] {
         border: 1px solid rgba(158, 216, 255, 0.14);
         border-radius: 8px;
-        background: rgba(9, 15, 25, 0.58);
+        background: rgba(8, 14, 23, 0.76);
         box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
         backdrop-filter: blur(14px);
     }
@@ -3563,7 +3579,7 @@ def inject_lab_theme():
         padding: 0.85rem 0.95rem;
     }
     [data-testid="stMetricLabel"] {
-        color: rgba(201, 226, 244, 0.76);
+        color: rgba(235, 245, 255, 0.88);
         font-weight: 700;
     }
     [data-testid="stMetricValue"] {
@@ -3571,7 +3587,10 @@ def inject_lab_theme():
     }
     [data-testid="stCaptionContainer"],
     .stCaption {
-        color: rgba(219, 233, 245, 0.68);
+        color: rgba(235, 245, 255, 0.78);
+    }
+    [data-testid="stDataFrame"] {
+        color: #f8fbff;
     }
     div[data-testid="stTabs"] button {
         border-radius: 8px 8px 0 0;
@@ -3905,7 +3924,7 @@ plain_caption(
     f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
     "Costs shown in the app are yearly unless a label explicitly says 4-year. "
     "Financial Survivability asks whether the college is realistic for the entered budget and debt comfort. "
-    "Need Value and Future ROI use both near-term earnings after graduation and longer-term earnings 10 years later. "
+    "Need Value and Future ROI use both near-term earnings after graduation and 10-year earnings snapshots, not lifetime earnings. "
     f"{describe_score_mode(profile_settings)}"
 )
 
@@ -3931,6 +3950,10 @@ with explorer_tab:
     st.subheader("College ROI Explorer")
     st.caption(
         "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Need Value Score."
+    )
+    st.info(
+        "Quick read: earnings are reported snapshots, not lifetime earnings. Future ROI uses school-wide early and 10-year earnings. "
+        "If you enter an Academic focus, Major-Adjusted Value and Program Outcomes use major/focus-specific earnings and debt when public data is available."
     )
     header_col, search_col = st.columns([1, 2])
     header_col.subheader("College")
