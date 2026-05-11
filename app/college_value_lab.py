@@ -19,8 +19,10 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "processed" / "college_roi_clean.csv"
 PROGRAM_DATA_PATH = ROOT / "data" / "processed" / "college_programs_clean.csv"
+MERIT_AID_DATA_PATH = ROOT / "data" / "processed" / "college_merit_aid_clean.csv"
 DATA_SCHEMA_VERSION = 2
 PROGRAM_SCHEMA_VERSION = 1
+MERIT_AID_SOURCE_URL = "https://www.collegetransitions.com/dataverse/merit-aid/"
 
 NICKNAMES = {
     "asu": ["arizona state university"],
@@ -239,7 +241,7 @@ VALIDATION_SCHOOL_NAMES = [
 
 
 @st.cache_data
-def load_data(data_updated_at, schema_version):
+def load_data(data_updated_at, schema_version, merit_data_updated_at):
     data = pd.read_csv(DATA_PATH)
     required_columns = set(EARNINGS_OPTIONS.values())
     missing_columns = sorted(required_columns - set(data.columns))
@@ -256,7 +258,51 @@ def load_data(data_updated_at, schema_version):
     for column in ["school_url", "net_price_calculator_url"]:
         if column not in data.columns:
             data[column] = None
+    merit_data = load_merit_aid_data(merit_data_updated_at)
+    if not merit_data.empty:
+        data = data.merge(merit_data, on="unit_id", how="left")
+    for column in [
+        "merit_aid_percent",
+        "merit_aid_average_award",
+        "merit_cost_of_attendance_in_state",
+        "merit_cost_of_attendance_out_of_state",
+    ]:
+        if column not in data.columns:
+            data[column] = None
+    if "merit_aid_source_year" not in data.columns:
+        data["merit_aid_source_year"] = None
+    data["merit_aid_signal"] = data.apply(
+        lambda row: merit_aid_signal(row.get("merit_aid_percent"), row.get("merit_aid_average_award")),
+        axis=1,
+    )
     return data
+
+
+@st.cache_data
+def load_merit_aid_data(data_updated_at):
+    if data_updated_at is None:
+        return pd.DataFrame()
+    data = pd.read_csv(MERIT_AID_DATA_PATH)
+    expected_columns = [
+        "unit_id",
+        "merit_aid_percent",
+        "merit_aid_average_award",
+        "merit_cost_of_attendance_in_state",
+        "merit_cost_of_attendance_out_of_state",
+        "merit_aid_source_year",
+    ]
+    for column in expected_columns:
+        if column not in data.columns:
+            data[column] = None
+    for column in [
+        "unit_id",
+        "merit_aid_percent",
+        "merit_aid_average_award",
+        "merit_cost_of_attendance_in_state",
+        "merit_cost_of_attendance_out_of_state",
+    ]:
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+    return data[expected_columns].drop_duplicates("unit_id")
 
 
 @st.cache_data
@@ -435,6 +481,20 @@ def roi_rating(score):
     if score >= 30:
         return "Below average"
     return "Weak"
+
+
+def merit_aid_signal(percent_receiving, average_award):
+    if pd.isna(percent_receiving) and pd.isna(average_award):
+        return "Merit data unavailable"
+    if pd.notna(percent_receiving) and percent_receiving <= 1 and (pd.isna(average_award) or average_award == 0):
+        return "Little/no merit aid"
+    if pd.notna(percent_receiving) and percent_receiving >= 35 and pd.notna(average_award) and average_award >= 15000:
+        return "Strong merit opportunity"
+    if pd.notna(percent_receiving) and percent_receiving >= 20 and pd.notna(average_award) and average_award >= 8000:
+        return "Possible merit opportunity"
+    if pd.notna(percent_receiving) and percent_receiving >= 10:
+        return "Limited merit opportunity"
+    return "Rare merit aid"
 
 
 def admissions_category(admission_rate):
@@ -778,6 +838,7 @@ TOOLTIPS = {
     "net_price_calculator": "Official college net price calculator when College Scorecard reports a link. These school calculators use institutional data and should be checked before making application or enrollment decisions.",
     "admissions_category": "Rough admissions realism label using reported admission rate and, if entered, GPA/test/EC profile. This is not a personalized chance calculator. Ultra-selective schools stay reaches for everyone.",
     "academic_strength": "Rough 0-100 academic profile signal from GPA, SAT or ACT, and extracurricular strength. It only affects admissions display labels, not financial value scores.",
+    "merit_aid": "Merit aid means non-need aid for freshmen without financial need, based on College Transitions' Common Data Set compilation when available. This is an opportunity signal, not a guaranteed scholarship.",
 }
 
 
@@ -1508,9 +1569,9 @@ def add_program_focus(data, program_data_updated_at, profile):
 
 
 @st.cache_data(show_spinner="Scoring colleges for this profile...")
-def prepare_scenario_data(data_updated_at, program_data_updated_at, schema_version, program_schema_version, profile_items):
+def prepare_scenario_data(data_updated_at, program_data_updated_at, merit_data_updated_at, schema_version, program_schema_version, profile_items):
     profile = dict(profile_items)
-    data = load_data(data_updated_at, schema_version)
+    data = load_data(data_updated_at, schema_version, merit_data_updated_at)
     scenarios = build_cost_scenarios(data, profile)
     scenarios = add_need_value_score(scenarios, profile)
     scenarios = add_program_focus(scenarios, program_data_updated_at, profile)
@@ -1558,6 +1619,11 @@ def show_college_profile(row):
     col2.metric("Yearly Estimated Cost After Aid", money(row["cost_after_aid"]), help=TOOLTIPS["cost_after_aid"])
     col3.metric("Earnings After Grad", money(row["earnings_after_grad"]), help="Median earnings 1 year after graduation when available.")
     col4.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available.")
+
+    merit_cols = st.columns(3)
+    merit_cols[0].metric("Merit Aid Signal", row["merit_aid_signal"], help=TOOLTIPS["merit_aid"])
+    merit_cols[1].metric("Freshmen w/o Need Getting Merit", pct(row["merit_aid_percent"] / 100) if pd.notna(row["merit_aid_percent"]) else "N/A", help=TOOLTIPS["merit_aid"])
+    merit_cols[2].metric("Avg Merit Award", money(row["merit_aid_average_award"]), help=TOOLTIPS["merit_aid"])
 
     col4, col5, col6 = st.columns(3)
     col4.metric("Future ROI Score", number(row["roi_score"]), row["roi_rating"], help=TOOLTIPS["roi_score"])
@@ -2865,6 +2931,15 @@ def show_methodology_page():
         "Earnings and debt can be missing because College Scorecard suppresses small or sensitive cells."
     )
 
+    st.markdown("##### Merit-aid data")
+    st.write(
+        "Merit Aid Signal uses College Transitions' Average Merit Aid table when the optional processed file is present. "
+        "That table reports the percent of incoming freshmen without financial need who received institutional merit aid and the average merit award, "
+        "compiled from each institution's Common Data Set. This app treats it as an opportunity signal only. It does not subtract the award from cost "
+        "because merit scholarships depend on applicant strength, institutional priorities, deadlines, and scholarship rules."
+    )
+    st.markdown(f"[Open the merit-aid source table]({MERIT_AID_SOURCE_URL})")
+
     st.markdown("##### Important limitations")
     st.markdown(
         """
@@ -2952,6 +3027,9 @@ def show_college_browser(data, visible_rows=15):
             "admissions_category",
             "admissions_selectivity",
             "academic_strength_score",
+            "merit_aid_signal",
+            "merit_aid_percent",
+            "merit_aid_average_award",
             "need_value_score",
             "data_coverage",
         ]
@@ -2984,6 +3062,9 @@ def show_college_browser(data, visible_rows=15):
             "admissions_category": "Admissions Category",
             "admissions_selectivity": "Admissions Selectivity",
             "academic_strength_score": "Academic Profile Signal",
+            "merit_aid_signal": "Merit Aid Signal",
+            "merit_aid_percent": "Merit Aid %",
+            "merit_aid_average_award": "Avg Merit Award",
             "need_value_score": "Need Value Score",
             "data_coverage": "Data Coverage",
         }
@@ -3014,6 +3095,9 @@ def show_college_browser(data, visible_rows=15):
             "ROI Rating",
             "Admissions Selectivity",
             "Academic Profile Signal",
+            "Merit Aid Signal",
+            "Merit Aid %",
+            "Avg Merit Award",
             "Earnings 10 Years Later",
             "Earnings After Grad",
             "Debt / Early Earnings",
@@ -3046,6 +3130,9 @@ def show_college_browser(data, visible_rows=15):
                 "Program Debt",
                 "Admissions Selectivity",
                 "Academic Profile Signal",
+                "Merit Aid Signal",
+                "Merit Aid %",
+                "Avg Merit Award",
                 "Confidence",
                 "Missing Data Warning",
                 "Data Coverage",
@@ -3074,6 +3161,9 @@ def show_college_browser(data, visible_rows=15):
             "Admissions Selectivity": st.column_config.TextColumn(
                 help="Generic selectivity label using only the school's reported admission rate."
             ),
+            "Merit Aid Signal": st.column_config.TextColumn(help=TOOLTIPS["merit_aid"]),
+            "Merit Aid %": st.column_config.NumberColumn(format="%.1f%%", help=TOOLTIPS["merit_aid"]),
+            "Avg Merit Award": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["merit_aid"]),
             "Academic Profile Signal": st.column_config.ProgressColumn(
                 help=TOOLTIPS["academic_strength"],
                 format="%.0f",
@@ -3497,12 +3587,14 @@ for index, step in enumerate([
 ]):
     flow_cols[index].caption(step)
 
-df = load_data(DATA_PATH.stat().st_mtime, DATA_SCHEMA_VERSION)
+merit_updated_at = MERIT_AID_DATA_PATH.stat().st_mtime if MERIT_AID_DATA_PATH.exists() else None
+df = load_data(DATA_PATH.stat().st_mtime, DATA_SCHEMA_VERSION, merit_updated_at)
 programs_updated_at = PROGRAM_DATA_PATH.stat().st_mtime if PROGRAM_DATA_PATH.exists() else None
 profile_settings = get_profile_settings()
 scenario_df = prepare_scenario_data(
     DATA_PATH.stat().st_mtime,
     programs_updated_at,
+    merit_updated_at,
     DATA_SCHEMA_VERSION,
     PROGRAM_SCHEMA_VERSION,
     tuple(profile_settings.items()),
