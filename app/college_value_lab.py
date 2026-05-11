@@ -1350,9 +1350,12 @@ def search_colleges(data, query, limit=None):
 
 @st.cache_data(show_spinner=False)
 def program_focus_matches(program_data_updated_at, focus_query):
-    program_data = load_program_data(program_data_updated_at, PROGRAM_SCHEMA_VERSION)
     clean_query = normalize_search_text(focus_query)
-    if program_data.empty or not clean_query:
+    if not clean_query:
+        return pd.DataFrame()
+
+    program_data = load_program_data(program_data_updated_at, PROGRAM_SCHEMA_VERSION)
+    if program_data.empty:
         return pd.DataFrame()
 
     query_tokens = clean_query.split()
