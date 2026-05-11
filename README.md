@@ -120,15 +120,25 @@ Estimate Confidence shows how much public evidence supports the app's estimate. 
 - Plain-English financial signals, budget-gap estimates, and debt-to-earnings warnings.
 - Estimate confidence and official net price calculator links.
 - Optional program-level outcomes by academic focus using College Scorecard field-of-study records.
+- Optional merit-aid opportunity signals from Common Data Set-derived public tables.
 - Dedicated methodology page explaining scores, data sources, and limitations.
-- Selected Schools tracker with application status, personal fit rating, notes, shortlist comparison, and a decision score.
+- Selected Schools tracker with application status, personal fit rating, notes, shortlist comparison, decision score, and CSV/JSON export.
 - Data coverage indicators so missing public data is visible.
+
+## Competition / Beta Package
+
+The project includes supporting materials for a public beta and Congressional App Challenge submission:
+
+- `COMPETITION_PACKAGE.md`: written response draft, app pitch, data sources, impact plan, and limitations.
+- `DEMO_VIDEO_SCRIPT.md`: 1-3 minute video script.
+- `USER_TESTING_TRACKER.md`: testing protocol and feedback tracker.
+- `VALIDATION_EXAMPLES.md`: official calculator validation worksheet.
+- `PERSONA_AUDIT.md`: fake-user stress test and product risks.
 
 ## Next Features
 
-- Expand the program-level pull to cover the full cleaned institution list.
-- Add export/import for selected schools while the app is still in Streamlit.
-- Run real user testing with students and counselors.
+- Finish 5-10 official calculator validation examples.
+- Run real user testing with 10-20 students, parents, teachers, or counselors.
 - Add persistent user accounts and saved school lists in a future full web app.
 - Rebuild the product with Next.js, Supabase Auth, Supabase Postgres, and Vercel when moving beyond Streamlit.
 - See `PRODUCT_MIGRATION_PLAN.md` for the full database/authentication roadmap.

@@ -8,6 +8,7 @@ Run locally:
 
 import difflib
 import html
+import json
 import re
 from pathlib import Path
 
@@ -1065,6 +1066,37 @@ def selected_schools_summary_markdown(table, profile):
         ]
     )
     return "\n".join(lines)
+
+
+def selected_schools_export_json(selected, profile):
+    payload = {
+        "app": "College Value Lab",
+        "version": 1,
+        "profile_snapshot": {
+            "home_state": profile["home_state"],
+            "family_income_bracket": profile["family_income_bracket"],
+            "academic_focus": profile["academic_focus"],
+            "annual_family_budget": profile["annual_family_budget"],
+            "max_comfortable_debt": profile["max_comfortable_debt"],
+        },
+        "selected_schools": selected,
+    }
+    return json.dumps(payload, indent=2, default=str).encode("utf-8")
+
+
+def parse_selected_schools_import(uploaded_file):
+    try:
+        payload = json.loads(uploaded_file.getvalue().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, "That file was not valid College Value Lab JSON."
+
+    selected = payload.get("selected_schools") if isinstance(payload, dict) else None
+    if not isinstance(selected, dict):
+        return None, "The JSON file did not include a selected_schools object."
+    for key, value in selected.items():
+        if not isinstance(key, str) or not isinstance(value, dict) or "College" not in value:
+            return None, "The selected_schools data did not match the expected format."
+    return selected, None
 
 
 def score_band_table():
@@ -2222,6 +2254,21 @@ def show_selected_schools_page(scenario_data):
 
     if not selected:
         st.info("No schools selected yet. Go to Explorer, choose a college, and click Add to selected schools.")
+        with st.expander("Restore a saved shortlist"):
+            uploaded_shortlist = st.file_uploader(
+                "Upload College Value Lab shortlist JSON",
+                type=["json"],
+                help="Upload the JSON file created from a previous Selected Schools page.",
+                key="empty_shortlist_restore",
+            )
+            if uploaded_shortlist is not None:
+                imported, error = parse_selected_schools_import(uploaded_shortlist)
+                if error:
+                    st.error(error)
+                elif st.button("Restore uploaded shortlist", width="stretch", key="empty_restore_button"):
+                    st.session_state["selected_schools"] = imported
+                    st.success("Restored selected schools from JSON.")
+                    st.rerun()
         return
 
     selected = refresh_selected_school_data(selected, scenario_data)
@@ -2663,11 +2710,32 @@ def show_selected_schools_page(scenario_data):
         "text/csv",
     )
     st.download_button(
+        "Download restorable shortlist JSON",
+        selected_schools_export_json(st.session_state["selected_schools"], profile),
+        "college_value_lab_shortlist.json",
+        "application/json",
+        help="Use this file to restore your selected schools later in the same app.",
+    )
+    st.download_button(
         "Download counselor/family summary",
         selected_schools_summary_markdown(selected_table, profile).encode("utf-8"),
         "college_shortlist_summary.md",
         "text/markdown",
     )
+    with st.expander("Restore a saved shortlist"):
+        uploaded_shortlist = st.file_uploader(
+            "Upload College Value Lab shortlist JSON",
+            type=["json"],
+            help="Upload the JSON file created by Download restorable shortlist JSON.",
+        )
+        if uploaded_shortlist is not None:
+            imported, error = parse_selected_schools_import(uploaded_shortlist)
+            if error:
+                st.error(error)
+            elif st.button("Restore uploaded shortlist", width="stretch"):
+                st.session_state["selected_schools"] = imported
+                st.success("Restored selected schools from JSON.")
+                st.rerun()
     st.caption(
         "For now, progress is saved in this browser session. A real deployed version should use user accounts and a database."
     )
@@ -2764,7 +2832,18 @@ def show_validation_page(scenario_data):
     calculated["Difference"] = official - app_estimate
     if official.notna().any():
         st.markdown("##### Validation summary")
-        summary = calculated[official.notna()][["College", "App Yearly Estimate", "Official Calculator Result", "Difference"]]
+        validated = calculated[official.notna()].copy()
+        validated["Absolute Difference"] = validated["Difference"].abs()
+        avg_abs_difference = validated["Absolute Difference"].mean()
+        within_5000 = int((validated["Absolute Difference"] <= 5000).sum())
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Validated Schools", f"{len(validated):,}")
+        summary_cols[1].metric("Avg Absolute Difference", money(avg_abs_difference))
+        summary_cols[2].metric("Within $5k/year", f"{within_5000}/{len(validated)}")
+        st.caption(
+            "This is not a final accuracy claim. It is a transparency check showing how close the public-data estimate is to official calculator results for one sample profile."
+        )
+        summary = validated[["College", "App Yearly Estimate", "Official Calculator Result", "Difference", "Absolute Difference"]]
         st.dataframe(
             summary,
             width="stretch",
@@ -2776,6 +2855,7 @@ def show_validation_page(scenario_data):
                     format="$%d",
                     help="Official calculator result minus the app estimate. Positive means the official calculator was more expensive.",
                 ),
+                "Absolute Difference": st.column_config.NumberColumn(format="$%d"),
             },
         )
     st.download_button(
@@ -2788,28 +2868,50 @@ def show_validation_page(scenario_data):
 
 def show_user_testing_page():
     st.subheader("User Testing")
-    st.caption("Before publishing widely, test whether real students understand it and trust it.")
+    st.caption("Before publishing widely, test whether real students understand it, trust it, and know what to do next.")
     st.markdown(
         """
-1. Ask 5-10 students or counselors to use the app without you explaining it.
+1. Ask 10-20 students, parents, teachers, or counselors to use the app without you explaining it.
 2. Watch where they hesitate, misunderstand a score, or cannot find the next step.
 3. Ask them to add 3 schools, run at least 1 official calculator, and compare the shortlist.
 4. Record confusing moments as issues, not as personal feedback.
 5. Fix the top 3 repeated problems before calling the site public.
 """
     )
+    st.markdown("##### Tester task script")
+    task_table = pd.DataFrame(
+        [
+            [1, "Enter a profile", "Add home state, income range, budget, intended focus, and optional GPA/test/EC fields."],
+            [2, "Explore", "Find one likely/target school, one reach school, and one school that looks financially safe."],
+            [3, "Shortlist", "Add 3-5 schools and read the shortlist health warnings."],
+            [4, "Verify", "Open one official calculator and enter its yearly result."],
+            [5, "React", "Say which score or label felt least clear."],
+        ],
+        columns=["Step", "Task", "What to observe"],
+    )
+    st.dataframe(task_table, width="stretch", hide_index=True)
+
     st.markdown("##### Questions to ask testers")
     testing_questions = pd.DataFrame(
         [
             ["Clarity", "What did you think Need Value Score meant before reading the methodology?"],
+            ["Clarity", "Did Financial Survivability feel different from Future ROI Score?"],
+            ["Admissions", "Did Admissions Fit feel like a warning label or like a fake admissions chance?"],
             ["Trust", "Which number did you trust least, and why?"],
             ["Workflow", "Could you figure out what to do after adding a school?"],
+            ["Verification", "Did you understand why the official calculator step matters?"],
             ["Usefulness", "Would this change which colleges you research?"],
             ["Missing piece", "What information did you expect but could not find?"],
         ],
         columns=["Area", "Question"],
     )
     st.dataframe(testing_questions, width="stretch", hide_index=True)
+    st.download_button(
+        "Download user-testing questions CSV",
+        testing_questions.to_csv(index=False).encode("utf-8"),
+        "college_value_lab_user_testing_questions.csv",
+        "text/csv",
+    )
 
 
 def show_build_roadmap_page():
@@ -2820,14 +2922,19 @@ def show_build_roadmap_page():
     )
     st.markdown(
         """
-1. Keep improving the Streamlit prototype until the scoring and workflow feel right.
-2. Add program/focus data from College Scorecard field-of-study records for earnings and debt by broad major area.
-3. Only add an AI planner after the program-level data exists, so it can explain real evidence instead of guessing.
-4. Move from session-only selected schools to persistent storage.
-5. Rebuild as a full website with authentication, saved school lists, and a database.
-6. Publish the methodology and position the project around college affordability and inequality.
+1. Public beta: keep Streamlit Cloud stable, add import/export for shortlists, and make the profile -> explorer -> shortlist -> calculator workflow obvious.
+2. Credibility: validate 5-10 schools against official calculators and publish the method/limitations clearly.
+3. Testing: get 10-20 real users and fix the top repeated confusions.
+4. Competition package: prepare a 1-3 minute demo video, GitHub README, methodology, and Congressional App Challenge written response.
+5. Version 2: move from session-only selected schools to persistent accounts, saved lists, and a database.
 """
     )
+    st.markdown("##### Congressional App Challenge target")
+    st.write(
+        "Target submission package: working public app link, GitHub repository, demo video, short explanation of the problem, "
+        "data sources, scoring method, student impact, what was personally built, limitations, and next steps."
+    )
+    st.caption("Working deadline target: October 26, 2026 at 8:00 PM ET.")
     st.markdown("##### Why AI Is Not In The Prototype Yet")
     st.write(
         "AI could eventually help students turn messy goals into school-list actions, but adding it "
