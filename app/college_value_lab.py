@@ -441,6 +441,23 @@ def signed_money(value):
     return f"{sign}${abs(value):,.0f}"
 
 
+def signed_percent(value):
+    if pd.isna(value):
+        return "N/A"
+    sign = "+" if value > 0 else ""
+    return f"{sign}{value:.1%}"
+
+
+def major_earnings_difference_label(delta, percent_delta):
+    if pd.isna(delta):
+        return "Program earnings unavailable"
+    if delta > 0:
+        return f"{money(delta)} above school median ({signed_percent(percent_delta)})"
+    if delta < 0:
+        return f"{money(abs(delta))} below school median ({signed_percent(percent_delta)})"
+    return "Matches school median"
+
+
 def annual_budget_gap(cost_after_aid, yearly_budget):
     if yearly_budget <= 0 or pd.isna(cost_after_aid):
         return float("nan")
@@ -685,6 +702,13 @@ def plain_english_summary(row, profile):
 
     if row["risk_label"].startswith("Data limited"):
         cautions.append("some key public-data fields are missing")
+
+    if profile["academic_focus"] and pd.notna(row.get("program_earnings_vs_school")):
+        difference = row["program_earnings_vs_school"]
+        if difference > 0:
+            strengths.append(f"the matched major earns about {money(difference)} more than the school's overall early-career median")
+        elif difference < 0:
+            cautions.append(f"the matched major earns about {money(abs(difference))} less than the school's overall early-career median")
 
     if strengths:
         first_sentence = f"This school looks promising because {', '.join(strengths[:3])}."
@@ -1530,6 +1554,9 @@ def add_program_focus(data, program_data_updated_at, profile):
         "program_debt_to_earnings": None,
         "program_awards": None,
         "program_value_score": None,
+        "program_earnings_vs_school": None,
+        "program_earnings_vs_school_pct": None,
+        "program_earnings_vs_school_label": None,
         "program_data_points": None,
         "program_roi_index": None,
         "focus_adjusted_score": None,
@@ -1574,6 +1601,12 @@ def add_program_focus(data, program_data_updated_at, profile):
     data = data.drop(columns=list(default_columns.keys())).merge(matches, on="unit_id", how="left")
     data["program_roi_index"] = data.apply(
         lambda row: estimate_roi(row["program_earnings_1yr"], row["cost_after_aid"], row["graduation_rate"]),
+        axis=1,
+    )
+    data["program_earnings_vs_school"] = data["program_earnings_1yr"] - data["earnings_after_grad"]
+    data["program_earnings_vs_school_pct"] = data["program_earnings_vs_school"] / data["earnings_after_grad"].replace(0, np.nan)
+    data["program_earnings_vs_school_label"] = data.apply(
+        lambda row: major_earnings_difference_label(row["program_earnings_vs_school"], row["program_earnings_vs_school_pct"]),
         axis=1,
     )
     data["program_roi_percentile"] = percentile(data["program_roi_index"])
@@ -1695,7 +1728,13 @@ def show_college_profile(row):
             "Program-level data is matched by 4-digit CIP field of study. Missing values usually mean the data was privacy-suppressed."
         )
         st.write(f"Matched program: **{row['program_match']}**")
-        p2, p3, p4 = st.columns(3)
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric(
+            "Major Earnings Difference",
+            signed_money(row["program_earnings_vs_school"]),
+            signed_percent(row["program_earnings_vs_school_pct"]),
+            help="Matched program earnings minus this school's overall early-career earnings median. This is descriptive, not a guarantee that the major causes the difference.",
+        )
         p2.metric("Program Earnings 1 Year", money(row["program_earnings_1yr"]))
         p3.metric("Program Debt", money(row["program_debt"]))
         p4.metric("Program Value", number(row["program_value_score"]), help="Within the current dataset: program ROI, program earnings, and lower program debt.")
@@ -1833,6 +1872,9 @@ def add_selected_school(row, show_message=True):
             "Program Earnings": row.get("program_earnings_1yr"),
             "Program Debt": row.get("program_debt"),
             "Program Value": row.get("program_value_score"),
+            "Major Earnings Difference": row.get("program_earnings_vs_school"),
+            "Major Earnings Difference %": row.get("program_earnings_vs_school_pct") * 100 if pd.notna(row.get("program_earnings_vs_school_pct")) else None,
+            "Major Earnings vs School": row.get("program_earnings_vs_school_label"),
             "Earnings After Grad": row["earnings_after_grad"],
             "Earnings 10 Years Later": row["earnings_10yr_used"],
             "Graduation Rate": row["graduation_rate"],
@@ -1877,6 +1919,9 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Program Earnings": row.get("program_earnings_1yr"),
                 "Program Debt": row.get("program_debt"),
                 "Program Value": row.get("program_value_score"),
+                "Major Earnings Difference": row.get("program_earnings_vs_school"),
+                "Major Earnings Difference %": row.get("program_earnings_vs_school_pct") * 100 if pd.notna(row.get("program_earnings_vs_school_pct")) else None,
+                "Major Earnings vs School": row.get("program_earnings_vs_school_label"),
                 "Earnings After Grad": row["earnings_after_grad"],
                 "Earnings 10 Years Later": row["earnings_10yr_used"],
                 "Graduation Rate": row["graduation_rate"],
@@ -2361,7 +2406,7 @@ def show_selected_schools_page(scenario_data):
     selected_table["Graduation Rate"] = pd.to_numeric(
         selected_table["Graduation Rate"], errors="coerce"
     )
-    for column in ["Program Match", "Program Earnings", "Program Debt", "Program Value"]:
+    for column in ["Program Match", "Program Earnings", "Program Debt", "Program Value", "Major Earnings Difference", "Major Earnings Difference %", "Major Earnings vs School"]:
         if column not in selected_table.columns:
             selected_table[column] = None
     score_for_decision = selected_table["Need Value Score"]
@@ -2544,7 +2589,7 @@ def show_selected_schools_page(scenario_data):
         if "Major-Adjusted Value" in selected_column_order:
             selected_column_order.remove("Major-Adjusted Value")
     if selected_table["Program Match"].notna().any():
-        program_columns = ["Program Value", "Program Match", "Focus Match", "Program Earnings", "Program Debt"]
+        program_columns = ["Major Earnings vs School", "Major Earnings Difference", "Major Earnings Difference %", "Program Value", "Program Match", "Focus Match", "Program Earnings", "Program Debt"]
         if show_shortlist_details:
             insertion_index = selected_column_order.index("Future ROI Score") if "Future ROI Score" in selected_column_order else len(selected_column_order) - 1
             for program_column in reversed(program_columns):
@@ -2584,6 +2629,9 @@ def show_selected_schools_page(scenario_data):
             "Program Match",
             "Program Earnings",
             "Program Debt",
+            "Major Earnings vs School",
+            "Major Earnings Difference",
+            "Major Earnings Difference %",
             "Program Value",
             "Earnings After Grad",
             "Earnings 10 Years Later",
@@ -2665,6 +2713,17 @@ def show_selected_schools_page(scenario_data):
             "Earnings 10 Years Later": st.column_config.NumberColumn(format="$%d"),
             "Program Earnings": st.column_config.NumberColumn(format="$%d"),
             "Program Debt": st.column_config.NumberColumn(format="$%d"),
+            "Major Earnings vs School": st.column_config.TextColumn(
+                help="Plain-English version of the matched major's early earnings compared with this school's overall early-career median."
+            ),
+            "Major Earnings Difference": st.column_config.NumberColumn(
+                format="$%d",
+                help="Matched major earnings minus the school's overall early-career median earnings.",
+            ),
+            "Major Earnings Difference %": st.column_config.NumberColumn(
+                format="%.1f%%",
+                help="Matched major earnings difference as a percent of the school's overall early-career median earnings.",
+            ),
             "Program Value": st.column_config.ProgressColumn("Program Value (0-100)", format="%.0f", min_value=0, max_value=100),
             "Need Value Score": st.column_config.ProgressColumn("Need Value Score (0-100)", format="%.0f", min_value=0, max_value=100, help=TOOLTIPS["need_value_score"]),
             "Major-Adjusted Value": st.column_config.ProgressColumn("Major-Adjusted Value (0-100)", format="%.0f", min_value=0, max_value=100, help=TOOLTIPS["focus_adjusted_score"]),
@@ -3057,6 +3116,8 @@ def show_methodology_page():
         "Academic focus matching uses bachelor's-level 4-digit CIP field-of-study records. For common focuses like computer science, "
         "business, biology, nursing, economics, engineering, psychology, and education, the app uses CIP-code families to reduce bad fuzzy matches. "
         "When a focus is entered, Explorer sorts by Major-Adjusted Value instead of plain Need Value Score, and Selected Schools uses that score in its Decision Score. "
+        "Major Earnings Difference shows matched program earnings minus the school's overall early-career median earnings, so users can read major impact in dollars and percent instead of only a score. "
+        "That comparison is descriptive public data, not proof that the major alone causes the difference. "
         "Earnings and debt can be missing because College Scorecard suppresses small or sensitive cells."
     )
 
@@ -3148,6 +3209,9 @@ def show_college_browser(data, visible_rows=15):
             "program_earnings_1yr",
             "program_debt",
             "program_value_score",
+            "program_earnings_vs_school",
+            "program_earnings_vs_school_pct",
+            "program_earnings_vs_school_label",
             "focus_adjusted_score",
             "focus_match_status",
             "estimate_confidence",
@@ -3183,6 +3247,9 @@ def show_college_browser(data, visible_rows=15):
             "program_earnings_1yr": "Program Earnings",
             "program_debt": "Program Debt",
             "program_value_score": "Program Value",
+            "program_earnings_vs_school": "Major Earnings Difference",
+            "program_earnings_vs_school_pct": "Major Earnings Difference %",
+            "program_earnings_vs_school_label": "Major Earnings vs School",
             "focus_adjusted_score": "Major-Adjusted Value",
             "focus_match_status": "Focus Match",
             "estimate_confidence": "Confidence",
@@ -3200,6 +3267,7 @@ def show_college_browser(data, visible_rows=15):
     )
     table["Grad Rate"] = table["Grad Rate"] * 100
     table["Debt / Early Earnings"] = table["Debt / Early Earnings"] * 100
+    table["Major Earnings Difference %"] = table["Major Earnings Difference %"] * 100
     show_budget_gap = profile["annual_family_budget"] > 0
     show_detailed_columns = st.toggle(
         "Show detailed table columns",
@@ -3251,6 +3319,7 @@ def show_college_browser(data, visible_rows=15):
             "Survivability Label",
             "Admissions Category",
             "Program Match",
+            "Major Earnings vs School",
             "Program Earnings",
             "Program Debt",
             "Earnings After Grad",
@@ -3263,6 +3332,8 @@ def show_college_browser(data, visible_rows=15):
                 "Financial Survivability",
                 "Major-Adjusted Value",
                 "Program Value",
+                "Major Earnings Difference",
+                "Major Earnings Difference %",
                 "Future ROI Score",
                 "Focus Match",
                 "Admissions Selectivity",
@@ -3345,6 +3416,17 @@ def show_college_browser(data, visible_rows=15):
             "Focus Match": st.column_config.TextColumn(help="Whether the academic focus matched a bachelor's program row."),
             "Program Earnings": st.column_config.NumberColumn(format="$%d", help="Median earnings 1 year after completion for the matched program when available."),
             "Program Debt": st.column_config.NumberColumn(format="$%d", help="Median federal student loan debt for the matched program when available."),
+            "Major Earnings vs School": st.column_config.TextColumn(
+                help="Plain-English comparison between matched major earnings and this school's overall early-career median earnings."
+            ),
+            "Major Earnings Difference": st.column_config.NumberColumn(
+                format="$%d",
+                help="Matched major earnings minus this school's overall early-career median earnings. Useful for seeing whether this focus appears stronger or weaker than the school's average outcome.",
+            ),
+            "Major Earnings Difference %": st.column_config.NumberColumn(
+                format="%.1f%%",
+                help="Matched major earnings difference as a percent of this school's overall early-career median earnings.",
+            ),
             "Program Value": st.column_config.ProgressColumn(
                 "Program Value (0-100)",
                 help="Program-specific score using program ROI, program earnings, and lower program debt.",
