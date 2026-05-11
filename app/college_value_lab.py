@@ -1617,33 +1617,40 @@ def show_college_profile(row):
 
     col1, col2, col3, col4 = st.columns(4)
     profile = get_profile_settings()
-    col1.metric(
-        "Financial Survivability",
-        number(row["financial_survivability_score"]),
-        row["financial_survivability_label"],
-        help=TOOLTIPS["financial_survivability"],
+    col1.metric("Yearly Estimated Cost After Aid", money(row["cost_after_aid"]), help=TOOLTIPS["cost_after_aid"])
+    col2.metric("Yearly Over/Under Budget", signed_money(row["annual_budget_gap"]), help=TOOLTIPS["budget_gap"])
+    col3.metric(
+        "Estimated 4-Year Cost",
+        money(row["cost_after_aid"] * 4) if pd.notna(row["cost_after_aid"]) else "N/A",
+        help="Estimated yearly cost after aid multiplied by four. This is a planning estimate, not a bill.",
     )
-    score_to_show = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
-    score_label = "Major-Adjusted Value" if profile["academic_focus"] else "Need Value Score"
-    col2.metric(score_label, number(score_to_show), help=TOOLTIPS["focus_adjusted_score"] if profile["academic_focus"] else TOOLTIPS["need_value_score"])
-    col3.metric("Yearly Over/Under Budget", signed_money(row["annual_budget_gap"]), help=TOOLTIPS["budget_gap"])
-    col4.metric(
+    col4.metric("Earnings After Grad", money(row["earnings_after_grad"]), help="Median earnings 1 year after graduation when available.")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available. This is not lifetime earnings.")
+    col2.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
+    col3.metric(
         "Debt / Early Earnings",
         pct(row["debt_to_earnings_after_grad"]),
         help=TOOLTIPS["debt_to_earnings"],
     )
+    col4.metric("Graduation Rate", pct(row["graduation_rate"]), help=TOOLTIPS["graduation_rate"])
+
     plain_note(
-        f"Survivability label: {row['financial_survivability_label']}. "
+        f"Decision labels: {row['financial_survivability_label']} financially, "
+        f"{row['admissions_category']} for admissions, and {row['risk_label']} on budget/value. "
         f"{financial_survivability_summary(row['financial_survivability_label'])}"
     )
     st.caption(
         f"Trust label: {row['estimate_confidence']} confidence ({number(row['estimate_confidence_score'])}/100). "
         f"Why: {row['estimate_confidence_notes'] or 'core public fields are available.'}"
     )
+    score_to_show = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
+    score_label = "Major-Adjusted Value" if profile["academic_focus"] else "Need Value Score"
     score_to_explain = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
     st.caption(
         f"Score interpretation: {score_band_label(score_to_explain)}. "
-        "Use the official calculator before treating this as a final affordability answer."
+        "Scores are sorting helpers; use the dollar estimates and official calculator before treating this as a final affordability answer."
     )
     if profile["academic_focus"]:
         plain_note(
@@ -1657,9 +1664,14 @@ def show_college_profile(row):
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Yearly Full Cost Before Aid", money(row["cost_before_aid"]), help=TOOLTIPS["cost_before_aid"])
-    col2.metric("Yearly Estimated Cost After Aid", money(row["cost_after_aid"]), help=TOOLTIPS["cost_after_aid"])
-    col3.metric("Earnings After Grad", money(row["earnings_after_grad"]), help="Median earnings 1 year after graduation when available.")
-    col4.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available. This is not lifetime earnings.")
+    col2.metric(
+        "Financial Survivability",
+        number(row["financial_survivability_score"]),
+        row["financial_survivability_label"],
+        help=TOOLTIPS["financial_survivability"],
+    )
+    col3.metric(score_label, number(score_to_show), help=TOOLTIPS["focus_adjusted_score"] if profile["academic_focus"] else TOOLTIPS["need_value_score"])
+    col4.metric("Future ROI Score", number(row["roi_score"]), row["roi_rating"], help=TOOLTIPS["roi_score"])
 
     merit_cols = st.columns(3)
     merit_cols[0].metric("Merit Aid Signal", row["merit_aid_signal"], help=TOOLTIPS["merit_aid"])
@@ -1667,19 +1679,15 @@ def show_college_profile(row):
     merit_cols[2].metric("Avg Merit Award", money(row["merit_aid_average_award"]), help=TOOLTIPS["merit_aid"])
 
     col4, col5, col6 = st.columns(3)
-    col4.metric("Future ROI Score", number(row["roi_score"]), row["roi_rating"], help=TOOLTIPS["roi_score"])
-    col5.metric("Raw ROI Index", number(row["roi_index"], 2), help=TOOLTIPS["roi_index"])
+    col4.metric("Raw ROI Index", number(row["roi_index"], 2), help=TOOLTIPS["roi_index"])
+    col5.metric("On-Time Completion", pct(row["on_time_completion_rate"]), help=TOOLTIPS["on_time_completion_rate"])
+    col6.metric("Admissions Fit", row["admissions_category"], help=TOOLTIPS["admissions_category"])
 
-    col5, col6, col7 = st.columns(3)
-    col5.metric("Graduation Rate", pct(row["graduation_rate"]), help=TOOLTIPS["graduation_rate"])
-    col6.metric("On-Time Completion", pct(row["on_time_completion_rate"]), help=TOOLTIPS["on_time_completion_rate"])
-    col7.metric("Admissions Fit", row["admissions_category"], help=TOOLTIPS["admissions_category"])
     if has_academic_profile(profile):
         st.caption(
             f"Admissions fit uses your academic profile signal ({number(row['academic_strength_score'])}/100) "
             f"plus the school's reported admission rate. It is not a chance of admission."
         )
-    st.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
     plain_note(plain_english_summary(row, get_profile_settings()))
     if pd.notna(row.get("program_match")):
         st.markdown("##### Program Outcomes")
@@ -2409,9 +2417,12 @@ def show_selected_schools_page(scenario_data):
     selected_table = selected_table.sort_values("Decision Score", ascending=False)
 
     best_survival = selected_table.sort_values("Financial Survivability", ascending=False, na_position="last").iloc[0]
-    best_value = selected_table.sort_values("Need Value Score", ascending=False).iloc[0]
     lowest_cost = selected_table.sort_values("Estimated Cost After Aid", ascending=True, na_position="last").iloc[0]
     best_fit = selected_table.sort_values("Personal Fit", ascending=False, na_position="last").iloc[0]
+    if show_budget_gap and selected_table["Yearly Gap Using Calculator"].notna().any():
+        best_budget_fit = selected_table.sort_values("Yearly Gap Using Calculator", ascending=True, na_position="last").iloc[0]
+    else:
+        best_budget_fit = lowest_cost
     calculators_needed = int(selected_table["Official Calculator Estimate"].isna().sum())
     within_budget = int((selected_table["Affordability Verdict"] == "Within budget").sum())
     if profile["academic_focus"] and selected_table["Major-Adjusted Value"].notna().any():
@@ -2430,15 +2441,15 @@ def show_selected_schools_page(scenario_data):
         summary_card(
             "Safest Financial Fit",
             best_survival["College"],
-            f"{best_survival['Survivability Label']}: {number(best_survival['Financial Survivability'])}",
-            "Best Financial Survivability score in your selected list.",
+            f"{best_survival['Survivability Label']} · cost used: {money(best_survival['Cost Used In Decision'])}",
+            "Strongest mix of budget fit, debt stress, graduation rate, and estimate trust in your selected list.",
         )
     with summary_cols[1]:
         summary_card(
-            "Best Need Value",
-            best_value["College"],
-            f"Need Value: {number(best_value['Need Value Score'])}",
-            "Highest public-data Need Value Score in your selected list.",
+            "Best Budget Fit",
+            best_budget_fit["College"],
+            f"Yearly gap: {signed_money(best_budget_fit['Yearly Gap Using Calculator'])}" if show_budget_gap else f"Yearly estimate: {money(best_budget_fit['Estimated Cost After Aid'])}",
+            "Closest or most favorable fit against the yearly budget you entered.",
         )
     with summary_cols[2]:
         summary_card(
@@ -2472,8 +2483,8 @@ def show_selected_schools_page(scenario_data):
         "That school-specific number replaces the app's public estimate in Yearly Cost Used For Decisions."
     )
     st.caption(
-        "Score guide: 90-100 unusually strong, 70-89 strong, 50-69 mixed, below 50 risky or weak. "
-        "Low confidence means the next step should be verification, not blind trust."
+        "This page leads with real yearly cost, budget gap, debt, earnings, and next steps. "
+        "Scores still help sort and compare, but they should not replace the official calculator result."
     )
     if not show_budget_gap:
         st.info("Add the yearly amount your family can actually pay in Personal Profile to show Yearly Over/Under Budget.")
@@ -2486,13 +2497,12 @@ def show_selected_schools_page(scenario_data):
         "College",
         "Status",
         "Next Step",
-        "Financial Survivability",
+        "Cost Used In Decision",
+        "Yearly Over/Under Budget",
+        "Affordability Verdict",
         "Survivability Label",
         "Admissions Category",
-        "Affordability Verdict",
-        "Cost Used In Decision",
         "Official Calculator Estimate",
-        "Yearly Over/Under Budget",
         "Personal Fit",
         "Notes",
     ]
@@ -2903,8 +2913,8 @@ def show_user_testing_page():
     st.markdown("##### Questions to ask testers")
     testing_questions = pd.DataFrame(
         [
-            ["Clarity", "What did you think Need Value Score meant before reading the methodology?"],
-            ["Clarity", "Did Financial Survivability feel different from Future ROI Score?"],
+            ["Clarity", "Was the yearly cost, budget gap, debt, and earnings view more useful than the 0-100 scores?"],
+            ["Clarity", "Which score or label still felt too abstract?"],
             ["Admissions", "Did Admissions Fit feel like a warning label or like a fake admissions chance?"],
             ["Trust", "Which number did you trust least, and why?"],
             ["Workflow", "Could you figure out what to do after adding a school?"],
@@ -2977,6 +2987,9 @@ def show_methodology_page():
     )
 
     st.markdown("##### Score guide")
+    st.caption(
+        "Scores are comparison tools, not the main answer. The app intentionally leads with real dollar terms, debt, earnings, and risk labels because those are easier to verify and act on."
+    )
     st.dataframe(score_band_table(), width="stretch", hide_index=True)
 
     st.markdown("##### Score dictionary")
@@ -3191,33 +3204,37 @@ def show_college_browser(data, visible_rows=15):
     show_detailed_columns = st.toggle(
         "Show detailed table columns",
         value=False,
-        help="Turn this on for earnings, debt, confidence, data coverage, and program details. Off keeps the explorer focused.",
+        help="Turn this on for the score columns, confidence, data coverage, and extra program details. Off keeps the explorer focused on real costs and outcomes.",
+    )
+    st.caption(
+        "Default view shows decision numbers first: yearly cost, budget gap, admissions fit, earnings, debt, and graduation rate. "
+        "The app still sorts with its model, but the score columns are hidden unless you open detailed columns."
     )
     column_order = [
         "College name",
         "State",
-        "Financial Survivability",
-        "Survivability Label",
-        "Admissions Category",
-        "Need Value Score",
-        "Budget/Value Status",
         "Yearly Estimated Cost After Aid",
         "Yearly Over/Under Budget",
-        "Future ROI Score",
+        "Budget/Value Status",
+        "Survivability Label",
+        "Admissions Category",
+        "Earnings After Grad",
+        "Earnings 10 Years Later",
+        "Debt",
         "Grad Rate",
+        "Merit Aid Signal",
     ]
     if show_detailed_columns:
         column_order.extend([
+            "Financial Survivability",
+            "Need Value Score",
+            "Future ROI Score",
             "ROI Rating",
             "Admissions Selectivity",
             "Academic Profile Signal",
-            "Merit Aid Signal",
             "Merit Aid %",
             "Avg Merit Award",
-            "Earnings 10 Years Later",
-            "Earnings After Grad",
             "Debt / Early Earnings",
-            "Debt",
             "Confidence",
             "Missing Data Warning",
             "Data Coverage",
@@ -3228,25 +3245,28 @@ def show_college_browser(data, visible_rows=15):
         column_order = [
             "College name",
             "State",
-            "Financial Survivability",
-            "Survivability Label",
-            "Major-Adjusted Value",
-            "Budget/Value Status",
-            "Admissions Category",
             "Yearly Estimated Cost After Aid",
             "Yearly Over/Under Budget",
-            "Program Value",
-            "Future ROI Score",
+            "Budget/Value Status",
+            "Survivability Label",
+            "Admissions Category",
+            "Program Match",
+            "Program Earnings",
+            "Program Debt",
+            "Earnings After Grad",
+            "Earnings 10 Years Later",
+            "Grad Rate",
+            "Merit Aid Signal",
         ]
         if show_detailed_columns:
             column_order.extend([
-                "Program Match",
+                "Financial Survivability",
+                "Major-Adjusted Value",
+                "Program Value",
+                "Future ROI Score",
                 "Focus Match",
-                "Program Earnings",
-                "Program Debt",
                 "Admissions Selectivity",
                 "Academic Profile Signal",
-                "Merit Aid Signal",
                 "Merit Aid %",
                 "Avg Merit Award",
                 "Confidence",
