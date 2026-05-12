@@ -103,6 +103,39 @@ INCOME_NET_PRICE_COLUMNS = [
     if column and column != "full_cost"
 ]
 
+PROFILE_STATE_KEYS = [
+    "home_state",
+    "family_income_bracket",
+    "academic_focus",
+    "annual_family_budget",
+    "max_comfortable_debt",
+    "affordability_importance",
+    "earnings_importance",
+    "debt_importance",
+    "graduation_importance",
+    "in_state_importance",
+    "aid_uncertainty",
+    "first_gen",
+    "unweighted_gpa",
+    "sat_score",
+    "act_score",
+    "ec_score",
+]
+
+FILTER_STATE_KEYS = [
+    "filter_states",
+    "filter_regions",
+    "filter_degrees",
+    "filter_admissions_fits",
+    "filter_only_program_matches",
+    "filter_student_min",
+    "filter_student_max",
+    "filter_cost_min",
+    "filter_cost_max",
+    "filter_min_grad_rate",
+    "filter_min_data_coverage",
+]
+
 INCOME_BRACKET_ALIASES = {
     "110k+": "$110k+ with possible need-based aid",
     "$110k+": "$110k+ with possible need-based aid",
@@ -1128,6 +1161,31 @@ def selected_schools_export_json(selected, profile):
     return json.dumps(payload, indent=2, default=str).encode("utf-8")
 
 
+def progress_export_json(selected, profile):
+    payload = {
+        "app": "College Value Lab",
+        "version": 2,
+        "profile_state": {key: profile.get(key) for key in PROFILE_STATE_KEYS},
+        "filters": {
+            key: st.session_state.get(key)
+            for key in FILTER_STATE_KEYS
+            if key in st.session_state
+        },
+        "ownership_filters": {
+            key: value
+            for key, value in st.session_state.items()
+            if str(key).startswith("filter_ownership_")
+        },
+        "residency_filters": {
+            key: value
+            for key, value in st.session_state.items()
+            if str(key).startswith("filter_residency_")
+        },
+        "selected_schools": selected,
+    }
+    return json.dumps(payload, indent=2, default=str).encode("utf-8")
+
+
 def parse_selected_schools_import(uploaded_file):
     try:
         payload = json.loads(uploaded_file.getvalue().decode("utf-8"))
@@ -1141,6 +1199,37 @@ def parse_selected_schools_import(uploaded_file):
         if not isinstance(key, str) or not isinstance(value, dict) or "College" not in value:
             return None, "The selected_schools data did not match the expected format."
     return selected, None
+
+
+def parse_progress_import(uploaded_file):
+    try:
+        payload = json.loads(uploaded_file.getvalue().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None, "That file was not valid College Value Lab JSON."
+    if not isinstance(payload, dict) or payload.get("app") != "College Value Lab":
+        return None, "That file does not look like a College Value Lab progress file."
+    selected = payload.get("selected_schools", {})
+    if selected is None:
+        selected = {}
+    if not isinstance(selected, dict):
+        return None, "The selected_schools section was not valid."
+    for key, value in selected.items():
+        if not isinstance(key, str) or not isinstance(value, dict) or "College" not in value:
+            return None, "The selected_schools data did not match the expected format."
+    return payload, None
+
+
+def restore_progress_payload(payload):
+    for key, value in payload.get("profile_state", {}).items():
+        if key in PROFILE_STATE_KEYS:
+            st.session_state[key] = value
+    for key, value in payload.get("filters", {}).items():
+        if key in FILTER_STATE_KEYS:
+            st.session_state[key] = value
+    for filter_group in ["ownership_filters", "residency_filters"]:
+        for key, value in payload.get(filter_group, {}).items():
+            st.session_state[key] = value
+    st.session_state["selected_schools"] = payload.get("selected_schools", {})
 
 
 def score_band_table():
@@ -2164,6 +2253,32 @@ def show_personal_profile_page():
     st.caption(
         "This is not a financial-aid estimator. With a yearly budget entered, current affordability is mostly budget fit, not generic cheapness."
     )
+    st.markdown("##### Save or restore progress")
+    st.caption(
+        "Streamlit saves your work only for the current browser session. Download a progress file to keep your profile, filters, and selected schools."
+    )
+    st.download_button(
+        "Download full progress JSON",
+        progress_export_json(st.session_state.get("selected_schools", {}), profile),
+        "college_value_lab_progress.json",
+        "application/json",
+        help="Saves profile inputs, Explorer filters, and selected schools so you can restore them later.",
+    )
+    with st.expander("Restore saved progress"):
+        uploaded_progress = st.file_uploader(
+            "Upload College Value Lab progress JSON",
+            type=["json"],
+            key="profile_progress_restore",
+            help="Use the file created by Download full progress JSON.",
+        )
+        if uploaded_progress is not None:
+            payload, error = parse_progress_import(uploaded_progress)
+            if error:
+                st.error(error)
+            elif st.button("Restore profile, filters, and selected schools", width="stretch"):
+                restore_progress_payload(payload)
+                st.success("Restored saved progress.")
+                st.rerun()
 
 
 def show_what_if_simulator(selected_table, profile):
@@ -2822,6 +2937,13 @@ def show_selected_schools_page(scenario_data):
         selected_schools_summary_markdown(selected_table, profile).encode("utf-8"),
         "college_shortlist_summary.md",
         "text/markdown",
+    )
+    st.download_button(
+        "Download full progress JSON",
+        progress_export_json(st.session_state["selected_schools"], profile),
+        "college_value_lab_progress.json",
+        "application/json",
+        help="Saves profile inputs, Explorer filters, and selected schools so you can restore the whole session later.",
     )
     with st.expander("Restore a saved shortlist"):
         uploaded_shortlist = st.file_uploader(
@@ -3890,6 +4012,23 @@ for index, step in enumerate([
 ]):
     flow_cols[index].caption(step)
 
+PAGE_OPTIONS = [
+    "Personal Profile",
+    "Explorer",
+    "Selected Schools",
+    "Validation & Testing",
+    "Methodology",
+    "Build Roadmap",
+    "Why This Project",
+]
+active_page = st.radio(
+    "College Value Lab section",
+    PAGE_OPTIONS,
+    horizontal=True,
+    label_visibility="collapsed",
+    key="active_page",
+)
+
 merit_updated_at = MERIT_AID_DATA_PATH.stat().st_mtime if MERIT_AID_DATA_PATH.exists() else None
 df = load_data(DATA_PATH.stat().st_mtime, DATA_SCHEMA_VERSION, merit_updated_at)
 programs_updated_at = PROGRAM_DATA_PATH.stat().st_mtime if PROGRAM_DATA_PATH.exists() else None
@@ -3903,153 +4042,190 @@ scenario_df = prepare_scenario_data(
     tuple(profile_settings.items()),
 )
 
-with st.sidebar:
-    st.header("College Filters")
-    if profile_settings["home_state"] == "Prefer not to say":
-        st.caption(
-            "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate. Add a home state in Personal Profile to remove duplicate public in-state/out-of-state rows."
-        )
-    else:
-        st.caption(
-            f"Using {profile_settings['home_state']} as your home state: public colleges in {profile_settings['home_state']} show in-state cost; public colleges elsewhere show out-of-state cost."
-        )
-    if profile_settings["annual_family_budget"] > 0:
-        sort_column = "financial_survivability_score"
-    elif profile_settings["academic_focus"]:
-        sort_column = "focus_adjusted_score"
-    else:
-        sort_column = "need_value_score"
-    scenario_df = scenario_df.sort_values(sort_column, ascending=False, na_position="last")
-    only_program_matches = False
-    if profile_settings["academic_focus"]:
-        if programs_updated_at is None:
-            st.warning("Program-level data has not been fetched yet. Run `python3 scripts/fetch_college_programs.py`.")
-        else:
-            focus_matches = scenario_df["program_match"].notna().sum()
-            st.caption(f"Academic focus matches: {focus_matches:,} college scenario(s).")
-            st.caption("With an Academic focus entered, Explorer sorts by Major-Adjusted Value instead of plain Personalized Value Score.")
-            only_program_matches = st.checkbox(
-                "Only show schools with matching program data",
-                value=False,
-                help="Keeps colleges that have a bachelor's program matching the Academic focus in Personal Profile.",
+if profile_settings["annual_family_budget"] > 0:
+    sort_column = "financial_survivability_score"
+elif profile_settings["academic_focus"]:
+    sort_column = "focus_adjusted_score"
+else:
+    sort_column = "need_value_score"
+scenario_df = scenario_df.sort_values(sort_column, ascending=False, na_position="last")
+
+states = sorted(scenario_df["state"].dropna().unique())
+regions = sorted(scenario_df["region"].dropna().unique())
+degrees = sorted(scenario_df["predominant_degree"].dropna().unique())
+admissions_fit_options = [
+    "Likely",
+    "Target",
+    "Target/reach",
+    "Reach",
+    "Far reach",
+    "Extreme reach",
+    "Admissions data unavailable",
+]
+available_admissions_fits = [
+    label
+    for label in admissions_fit_options
+    if label in set(scenario_df["admissions_category"].dropna())
+]
+ownerships = sorted(scenario_df["ownership"].dropna().unique())
+residencies = sorted(scenario_df["residency"].dropna().unique())
+student_min = int(scenario_df["student_size"].dropna().min())
+student_max = int(scenario_df["student_size"].dropna().max())
+valid_costs = scenario_df["cost_after_aid"].dropna()
+cost_min = max(0, int(valid_costs.min()))
+cost_max = int(valid_costs.max())
+
+st.session_state.setdefault("filter_states", [])
+st.session_state.setdefault("filter_regions", [])
+st.session_state.setdefault("filter_degrees", ["Bachelor"])
+st.session_state.setdefault("filter_admissions_fits", [])
+st.session_state.setdefault("filter_only_program_matches", False)
+st.session_state["filter_states"] = [value for value in st.session_state["filter_states"] if value in states]
+st.session_state["filter_regions"] = [value for value in st.session_state["filter_regions"] if value in regions]
+st.session_state["filter_degrees"] = [value for value in st.session_state["filter_degrees"] if value in degrees]
+st.session_state["filter_admissions_fits"] = [
+    value for value in st.session_state["filter_admissions_fits"] if value in available_admissions_fits
+]
+st.session_state["filter_student_min"] = int(max(student_min, min(st.session_state.get("filter_student_min", 1000), student_max)))
+st.session_state["filter_student_max"] = int(max(student_min, min(st.session_state.get("filter_student_max", student_max), student_max)))
+if st.session_state["filter_student_min"] > st.session_state["filter_student_max"]:
+    st.session_state["filter_student_min"], st.session_state["filter_student_max"] = (
+        st.session_state["filter_student_max"],
+        st.session_state["filter_student_min"],
+    )
+st.session_state["filter_cost_min"] = int(max(cost_min, min(st.session_state.get("filter_cost_min", cost_min), cost_max)))
+st.session_state["filter_cost_max"] = int(max(cost_min, min(st.session_state.get("filter_cost_max", cost_max), cost_max)))
+if st.session_state["filter_cost_min"] > st.session_state["filter_cost_max"]:
+    st.session_state["filter_cost_min"], st.session_state["filter_cost_max"] = (
+        st.session_state["filter_cost_max"],
+        st.session_state["filter_cost_min"],
+    )
+st.session_state["filter_min_grad_rate"] = int(max(0, min(st.session_state.get("filter_min_grad_rate", 0), 100)))
+st.session_state["filter_min_data_coverage"] = int(max(0, min(st.session_state.get("filter_min_data_coverage", 80), 100)))
+for ownership in ownerships:
+    st.session_state.setdefault(f"filter_ownership_{ownership}", True)
+for residency in residencies:
+    st.session_state.setdefault(f"filter_residency_{residency}", True)
+
+if active_page == "Explorer":
+    with st.sidebar:
+        st.header("College Filters")
+        if profile_settings["home_state"] == "Prefer not to say":
+            st.caption(
+                "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate. Add a home state in Personal Profile to remove duplicate public in-state/out-of-state rows."
             )
+        else:
+            st.caption(
+                f"Using {profile_settings['home_state']} as your home state: public colleges in {profile_settings['home_state']} show in-state cost; public colleges elsewhere show out-of-state cost."
+            )
+        if profile_settings["academic_focus"]:
+            if programs_updated_at is None:
+                st.warning("Program-level data has not been fetched yet. Run `python3 scripts/fetch_college_programs.py`.")
+            else:
+                focus_matches = scenario_df["program_match"].notna().sum()
+                st.caption(f"Academic focus matches: {focus_matches:,} college scenario(s).")
+                st.caption("With an Academic focus entered, Explorer sorts by Major-Adjusted Value instead of plain Personalized Value Score.")
+                st.checkbox(
+                    "Only show schools with matching program data",
+                    key="filter_only_program_matches",
+                    help="Keeps colleges that have a bachelor's program matching the Academic focus in Personal Profile.",
+                )
 
-    states = sorted(scenario_df["state"].dropna().unique())
-    selected_states = st.multiselect("State", states, default=[])
-    regions = sorted(scenario_df["region"].dropna().unique())
-    selected_regions = st.multiselect("Region", regions, default=[])
-    degrees = sorted(scenario_df["predominant_degree"].dropna().unique())
-    selected_degrees = st.multiselect("Predominant degree", degrees, default=["Bachelor"])
-    admissions_fit_options = [
-        "Likely",
-        "Target",
-        "Target/reach",
-        "Reach",
-        "Far reach",
-        "Extreme reach",
-        "Admissions data unavailable",
+        st.multiselect("State", states, key="filter_states")
+        st.multiselect("Region", regions, key="filter_regions")
+        st.multiselect("Predominant degree", degrees, key="filter_degrees")
+        st.multiselect(
+            "Admissions fit",
+            available_admissions_fits,
+            key="filter_admissions_fits",
+            help="Filter by rough admissions realism for your GPA/test/EC profile. This is not an admission probability.",
+        )
+
+        st.caption("Ownership")
+        for ownership in ownerships:
+            st.checkbox(ownership, key=f"filter_ownership_{ownership}")
+
+        if profile_settings["home_state"] == "Prefer not to say":
+            st.caption("Residency")
+            for residency in residencies:
+                st.checkbox(residency, key=f"filter_residency_{residency}")
+
+        st.caption("Student size")
+        student_input_1, student_input_2 = st.columns(2)
+        student_input_1.number_input(
+            "Min students",
+            min_value=student_min,
+            max_value=student_max,
+            step=100,
+            key="filter_student_min",
+            help=TOOLTIPS["student_size"],
+        )
+        student_input_2.number_input(
+            "Max students",
+            min_value=student_min,
+            max_value=student_max,
+            step=100,
+            key="filter_student_max",
+        )
+
+        st.caption("Estimated cost after aid")
+        cost_input_1, cost_input_2 = st.columns(2)
+        cost_input_1.number_input(
+            "Min cost",
+            min_value=cost_min,
+            max_value=cost_max,
+            step=500,
+            key="filter_cost_min",
+            help=TOOLTIPS["cost_after_aid"],
+        )
+        cost_input_2.number_input(
+            "Max cost",
+            min_value=cost_min,
+            max_value=cost_max,
+            step=500,
+            key="filter_cost_max",
+        )
+
+        st.slider(
+            "Minimum graduation rate",
+            0,
+            100,
+            key="filter_min_grad_rate",
+            step=5,
+            help=TOOLTIPS["graduation_rate"],
+        )
+        st.slider(
+            "Minimum data coverage",
+            0,
+            100,
+            key="filter_min_data_coverage",
+            step=5,
+            help="Keeps rows with enough public data for the estimate to be useful.",
+        )
+
+selected_states = st.session_state["filter_states"]
+selected_regions = st.session_state["filter_regions"]
+selected_degrees = st.session_state["filter_degrees"]
+selected_admissions_fits = st.session_state["filter_admissions_fits"]
+selected_ownerships = [
+    ownership for ownership in ownerships if st.session_state.get(f"filter_ownership_{ownership}", True)
+]
+selected_residencies = []
+if profile_settings["home_state"] == "Prefer not to say":
+    selected_residencies = [
+        residency for residency in residencies if st.session_state.get(f"filter_residency_{residency}", True)
     ]
-    available_admissions_fits = [
-        label
-        for label in admissions_fit_options
-        if label in set(scenario_df["admissions_category"].dropna())
-    ]
-    selected_admissions_fits = st.multiselect(
-        "Admissions fit",
-        available_admissions_fits,
-        default=[],
-        help="Filter by rough admissions realism for your GPA/test/EC profile. This is not an admission probability.",
-    )
-
-    st.caption("Ownership")
-    ownerships = sorted(scenario_df["ownership"].dropna().unique())
-    selected_ownerships = [
-        ownership
-        for ownership in ownerships
-        if st.checkbox(ownership, value=True, key=f"ownership_{ownership}")
-    ]
-
-    selected_residencies = []
-    if profile_settings["home_state"] == "Prefer not to say":
-        st.caption("Residency")
-        residencies = sorted(scenario_df["residency"].dropna().unique())
-        selected_residencies = [
-            residency
-            for residency in residencies
-            if st.checkbox(residency, value=True, key=f"residency_{residency}")
-        ]
-
-    student_min = int(scenario_df["student_size"].dropna().min())
-    student_max = int(scenario_df["student_size"].dropna().max())
-    selected_student_range = st.slider(
-        "Student size",
-        student_min,
-        student_max,
-        (1000, student_max),
-        step=250,
-        help=TOOLTIPS["student_size"],
-    )
-    student_input_1, student_input_2 = st.columns(2)
-    student_lower = student_input_1.number_input(
-        "Min students",
-        min_value=student_min,
-        max_value=student_max,
-        value=selected_student_range[0],
-        step=100,
-    )
-    student_upper = student_input_2.number_input(
-        "Max students",
-        min_value=student_min,
-        max_value=student_max,
-        value=selected_student_range[1],
-        step=100,
-    )
-    selected_student_range = (min(student_lower, student_upper), max(student_lower, student_upper))
-
-    valid_costs = scenario_df["cost_after_aid"].dropna()
-    cost_min = max(0, int(valid_costs.min()))
-    cost_max = int(valid_costs.max())
-    selected_cost_range = st.slider(
-        "Estimated cost after aid",
-        cost_min,
-        cost_max,
-        (cost_min, cost_max),
-        step=1000,
-        help=TOOLTIPS["cost_after_aid"],
-    )
-    cost_input_1, cost_input_2 = st.columns(2)
-    cost_lower = cost_input_1.number_input(
-        "Min cost",
-        min_value=cost_min,
-        max_value=cost_max,
-        value=selected_cost_range[0],
-        step=500,
-    )
-    cost_upper = cost_input_2.number_input(
-        "Max cost",
-        min_value=cost_min,
-        max_value=cost_max,
-        value=selected_cost_range[1],
-        step=500,
-    )
-    selected_cost_range = (min(cost_lower, cost_upper), max(cost_lower, cost_upper))
-
-    min_grad_rate = st.slider(
-        "Minimum graduation rate",
-        0,
-        100,
-        0,
-        step=5,
-        help=TOOLTIPS["graduation_rate"],
-    )
-    min_data_coverage = st.slider(
-        "Minimum data coverage",
-        0,
-        100,
-        80,
-        step=5,
-        help="Keeps rows with enough public data for the estimate to be useful.",
-    )
+only_program_matches = bool(profile_settings["academic_focus"] and st.session_state.get("filter_only_program_matches", False))
+selected_student_range = (
+    min(st.session_state["filter_student_min"], st.session_state["filter_student_max"]),
+    max(st.session_state["filter_student_min"], st.session_state["filter_student_max"]),
+)
+selected_cost_range = (
+    min(st.session_state["filter_cost_min"], st.session_state["filter_cost_max"]),
+    max(st.session_state["filter_cost_min"], st.session_state["filter_cost_max"]),
+)
+min_grad_rate = st.session_state["filter_min_grad_rate"]
+min_data_coverage = st.session_state["filter_min_data_coverage"]
 
 filtered = scenario_df.copy()
 if selected_states:
@@ -4073,53 +4249,40 @@ filtered = filtered[
     & (filtered["data_coverage"] >= min_data_coverage)
 ]
 
-top = filtered.head(25)
-
-col1, col2, col3, col4 = st.columns(4)
-col1.metric(
-    "College Scenarios",
-    f"{len(filtered):,}",
-    help=f"{TOOLTIPS['colleges']} Cleaned schools: {len(df):,}. Cost scenarios: {len(scenario_df):,}.",
-)
-col2.metric("Median Yearly Est. Cost After Aid", money(filtered["cost_after_aid"].median()), help=TOOLTIPS["cost_after_aid"])
-if profile_settings["annual_family_budget"] > 0:
-    col3.metric(
-        "Median Financial Survivability",
-        number(filtered["financial_survivability_score"].median()),
-        help=TOOLTIPS["financial_survivability"],
+if active_page == "Explorer":
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric(
+        "College Scenarios",
+        f"{len(filtered):,}",
+        help=f"{TOOLTIPS['colleges']} Cleaned schools: {len(df):,}. Cost scenarios: {len(scenario_df):,}.",
     )
-else:
-    col3.metric("Median Earnings After Grad", money(filtered["earnings_after_grad"].median()), help="Median earnings 1 year after graduation when available.")
-col4.metric("Median Earnings 10 Years Later", money(filtered["earnings_10yr_used"].median()), help="Median earnings 10 years after entry when available.")
+    col2.metric("Median Yearly Est. Cost After Aid", money(filtered["cost_after_aid"].median()), help=TOOLTIPS["cost_after_aid"])
+    if profile_settings["annual_family_budget"] > 0:
+        col3.metric(
+            "Median Financial Survivability",
+            number(filtered["financial_survivability_score"].median()),
+            help=TOOLTIPS["financial_survivability"],
+        )
+    else:
+        col3.metric("Median Earnings After Grad", money(filtered["earnings_after_grad"].median()), help="Median earnings 1 year after graduation when available.")
+    col4.metric("Median Earnings 10 Years Later", money(filtered["earnings_10yr_used"].median()), help="Median earnings 10 years after entry when available.")
 
-if not filtered.empty:
-    signal_counts = filtered["risk_label"].value_counts().head(3)
-    signal_text = " | ".join(f"{label}: {count:,}" for label, count in signal_counts.items())
-    st.caption(f"Most common financial signals in this view: {signal_text}")
+    if not filtered.empty:
+        signal_counts = filtered["risk_label"].value_counts().head(3)
+        signal_text = " | ".join(f"{label}: {count:,}" for label, count in signal_counts.items())
+        st.caption(f"Most common financial signals in this view: {signal_text}")
 
-plain_caption(
-    f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
-    "Costs shown in the app are yearly unless a label explicitly says 4-year. "
-    "The score is the first comparison signal, but the table backs it up with readable numbers: cost before aid, cost after aid, estimated aid savings, budget fit, program earnings, and profile-specific risks. "
-    f"{describe_score_mode(profile_settings)}"
-)
+    plain_caption(
+        f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
+        "Costs shown in the app are yearly unless a label explicitly says 4-year. "
+        "The score is the first comparison signal, but the table backs it up with readable numbers: cost before aid, cost after aid, estimated aid savings, budget fit, program earnings, and profile-specific risks. "
+        f"{describe_score_mode(profile_settings)}"
+    )
 
-profile_tab, explorer_tab, selected_tab, validation_tab, methodology_tab, roadmap_tab, why_tab = st.tabs(
-    [
-        "Personal Profile",
-        "Explorer",
-        "Selected Schools",
-        "Validation & Testing",
-        "Methodology",
-        "Build Roadmap",
-        "Why This Project",
-    ]
-)
-
-with profile_tab:
+if active_page == "Personal Profile":
     show_personal_profile_page()
 
-with explorer_tab:
+elif active_page == "Explorer":
     st.subheader("College ROI Explorer")
     st.caption(
         "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Personalized Value Score."
@@ -4183,19 +4346,19 @@ with explorer_tab:
     if not filtered.empty:
         show_cost_earnings_chart(filtered)
 
-with selected_tab:
+elif active_page == "Selected Schools":
     show_selected_schools_page(scenario_df)
 
-with validation_tab:
+elif active_page == "Validation & Testing":
     show_validation_page(scenario_df)
     st.divider()
     show_user_testing_page()
 
-with methodology_tab:
+elif active_page == "Methodology":
     show_methodology_page()
 
-with roadmap_tab:
+elif active_page == "Build Roadmap":
     show_build_roadmap_page()
 
-with why_tab:
+elif active_page == "Why This Project":
     show_why_project_page()
