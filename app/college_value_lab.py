@@ -132,8 +132,23 @@ FILTER_STATE_KEYS = [
     "filter_student_max",
     "filter_cost_min",
     "filter_cost_max",
+    "filter_min_personalized_value",
+    "filter_min_financial_survivability",
+    "filter_min_major_adjusted_value",
+    "filter_min_future_roi_score",
+    "filter_min_current_affordability",
+    "filter_min_future_roi",
     "filter_min_grad_rate",
     "filter_min_data_coverage",
+    "filter_min_earnings_after_grad",
+    "filter_min_earnings_10yr",
+    "filter_max_median_debt",
+    "filter_min_estimated_aid_savings",
+    "filter_max_cost_before_aid",
+    "filter_max_yearly_over_budget",
+    "filter_min_confidence_score",
+    "filter_min_program_value",
+    "filter_min_program_earnings",
 ]
 
 INCOME_BRACKET_ALIASES = {
@@ -4074,6 +4089,19 @@ student_max = int(scenario_df["student_size"].dropna().max())
 valid_costs = scenario_df["cost_after_aid"].dropna()
 cost_min = max(0, int(valid_costs.min()))
 cost_max = int(valid_costs.max())
+valid_before_aid_costs = scenario_df["cost_before_aid"].dropna()
+valid_earnings_after_grad = scenario_df["earnings_after_grad"].dropna()
+valid_earnings_10yr = scenario_df["earnings_10yr_used"].dropna()
+valid_debts = scenario_df["median_debt"].dropna()
+valid_aid_savings = (scenario_df["cost_before_aid"] - scenario_df["cost_after_aid"]).clip(lower=0).dropna()
+valid_program_earnings = scenario_df["program_earnings_1yr"].dropna()
+cost_before_aid_max = int(valid_before_aid_costs.max()) if not valid_before_aid_costs.empty else cost_max
+earnings_after_grad_max = int(valid_earnings_after_grad.max()) if not valid_earnings_after_grad.empty else 0
+earnings_10yr_max = int(valid_earnings_10yr.max()) if not valid_earnings_10yr.empty else 0
+median_debt_max = int(valid_debts.max()) if not valid_debts.empty else 0
+aid_savings_max = int(valid_aid_savings.max()) if not valid_aid_savings.empty else 0
+program_earnings_max = int(valid_program_earnings.max()) if not valid_program_earnings.empty else 0
+budget_gap_max = int(max(0, scenario_df["annual_budget_gap"].dropna().max())) if profile_settings["annual_family_budget"] > 0 else 0
 
 st.session_state.setdefault("filter_states", [])
 st.session_state.setdefault("filter_regions", [])
@@ -4100,8 +4128,23 @@ if st.session_state["filter_cost_min"] > st.session_state["filter_cost_max"]:
         st.session_state["filter_cost_max"],
         st.session_state["filter_cost_min"],
     )
+st.session_state["filter_min_personalized_value"] = int(max(0, min(st.session_state.get("filter_min_personalized_value", 0), 100)))
+st.session_state["filter_min_financial_survivability"] = int(max(0, min(st.session_state.get("filter_min_financial_survivability", 0), 100)))
+st.session_state["filter_min_major_adjusted_value"] = int(max(0, min(st.session_state.get("filter_min_major_adjusted_value", 0), 100)))
+st.session_state["filter_min_future_roi_score"] = int(max(0, min(st.session_state.get("filter_min_future_roi_score", 0), 100)))
+st.session_state["filter_min_current_affordability"] = int(max(0, min(st.session_state.get("filter_min_current_affordability", 0), 100)))
+st.session_state["filter_min_future_roi"] = int(max(0, min(st.session_state.get("filter_min_future_roi", 0), 100)))
 st.session_state["filter_min_grad_rate"] = int(max(0, min(st.session_state.get("filter_min_grad_rate", 0), 100)))
 st.session_state["filter_min_data_coverage"] = int(max(0, min(st.session_state.get("filter_min_data_coverage", 80), 100)))
+st.session_state["filter_min_earnings_after_grad"] = int(max(0, min(st.session_state.get("filter_min_earnings_after_grad", 0), earnings_after_grad_max)))
+st.session_state["filter_min_earnings_10yr"] = int(max(0, min(st.session_state.get("filter_min_earnings_10yr", 0), earnings_10yr_max)))
+st.session_state["filter_max_median_debt"] = int(max(0, min(st.session_state.get("filter_max_median_debt", median_debt_max), median_debt_max)))
+st.session_state["filter_min_estimated_aid_savings"] = int(max(0, min(st.session_state.get("filter_min_estimated_aid_savings", 0), aid_savings_max)))
+st.session_state["filter_max_cost_before_aid"] = int(max(0, min(st.session_state.get("filter_max_cost_before_aid", cost_before_aid_max), cost_before_aid_max)))
+st.session_state["filter_max_yearly_over_budget"] = int(max(0, min(st.session_state.get("filter_max_yearly_over_budget", budget_gap_max), budget_gap_max)))
+st.session_state["filter_min_confidence_score"] = int(max(0, min(st.session_state.get("filter_min_confidence_score", 0), 100)))
+st.session_state["filter_min_program_value"] = int(max(0, min(st.session_state.get("filter_min_program_value", 0), 100)))
+st.session_state["filter_min_program_earnings"] = int(max(0, min(st.session_state.get("filter_min_program_earnings", 0), program_earnings_max)))
 for ownership in ownerships:
     st.session_state.setdefault(f"filter_ownership_{ownership}", True)
 for residency in residencies:
@@ -4140,6 +4183,35 @@ if active_page == "Explorer":
             key="filter_admissions_fits",
             help="Filter by rough admissions realism for your GPA/test/EC profile. This is not an admission probability.",
         )
+
+        st.markdown("##### Score filters")
+        st.caption("Use these when you want schools that clear a score floor, like all main scores 80+.")
+        score_col_1, score_col_2 = st.columns(2)
+        score_col_1.slider(
+            "Min Personalized Value",
+            0,
+            100,
+            key="filter_min_personalized_value",
+            step=5,
+            help=TOOLTIPS["need_value_score"],
+        )
+        score_col_2.slider(
+            "Min Financial Survivability",
+            0,
+            100,
+            key="filter_min_financial_survivability",
+            step=5,
+            help=TOOLTIPS["financial_survivability"],
+        )
+        if profile_settings["academic_focus"]:
+            st.slider(
+                "Min Major-Adjusted Value",
+                0,
+                100,
+                key="filter_min_major_adjusted_value",
+                step=5,
+                help=TOOLTIPS["focus_adjusted_score"],
+            )
 
         st.caption("Ownership")
         for ownership in ownerships:
@@ -4186,22 +4258,131 @@ if active_page == "Explorer":
             key="filter_cost_max",
         )
 
-        st.slider(
-            "Minimum graduation rate",
-            0,
-            100,
-            key="filter_min_grad_rate",
-            step=5,
-            help=TOOLTIPS["graduation_rate"],
-        )
-        st.slider(
-            "Minimum data coverage",
-            0,
-            100,
-            key="filter_min_data_coverage",
-            step=5,
-            help="Keeps rows with enough public data for the estimate to be useful.",
-        )
+        with st.expander("Detailed filters"):
+            st.caption("Use these for sharper numeric cuts once the main filters are close.")
+            detailed_score_1, detailed_score_2 = st.columns(2)
+            detailed_score_1.slider(
+                "Min Future ROI Score",
+                0,
+                100,
+                key="filter_min_future_roi_score",
+                step=5,
+                help=TOOLTIPS["roi_score"],
+            )
+            detailed_score_2.slider(
+                "Min Current Affordability",
+                0,
+                100,
+                key="filter_min_current_affordability",
+                step=5,
+                help="Score for how affordable the school looks now, based on estimated cost, budget fit, and debt.",
+            )
+            detailed_score_3, detailed_score_4 = st.columns(2)
+            detailed_score_3.slider(
+                "Min Long-Term ROI",
+                0,
+                100,
+                key="filter_min_future_roi",
+                step=5,
+                help="Future-facing score using earnings, ROI, early earnings, and graduation rate.",
+            )
+            detailed_score_4.slider(
+                "Min Confidence Score",
+                0,
+                100,
+                key="filter_min_confidence_score",
+                step=5,
+                help=TOOLTIPS["estimate_confidence"],
+            )
+            if profile_settings["academic_focus"]:
+                program_score_1, program_score_2 = st.columns(2)
+                program_score_1.slider(
+                    "Min Program Value",
+                    0,
+                    100,
+                    key="filter_min_program_value",
+                    step=5,
+                    help="Program-specific score using program ROI, program earnings, and lower program debt.",
+                )
+                program_score_2.number_input(
+                    "Min program earnings",
+                    min_value=0,
+                    max_value=max(0, program_earnings_max),
+                    step=1000,
+                    key="filter_min_program_earnings",
+                    help="Median earnings 1 year after completion for the matched program.",
+                )
+
+            st.slider(
+                "Minimum graduation rate",
+                0,
+                100,
+                key="filter_min_grad_rate",
+                step=5,
+                help=TOOLTIPS["graduation_rate"],
+            )
+            st.slider(
+                "Minimum data coverage",
+                0,
+                100,
+                key="filter_min_data_coverage",
+                step=5,
+                help="Keeps rows with enough public data for the estimate to be useful.",
+            )
+
+            earnings_filter_1, earnings_filter_2 = st.columns(2)
+            earnings_filter_1.number_input(
+                "Min earnings after grad",
+                min_value=0,
+                max_value=max(0, earnings_after_grad_max),
+                step=1000,
+                key="filter_min_earnings_after_grad",
+                help="Median earnings 1 year after graduation when available.",
+            )
+            earnings_filter_2.number_input(
+                "Min earnings 10 years later",
+                min_value=0,
+                max_value=max(0, earnings_10yr_max),
+                step=1000,
+                key="filter_min_earnings_10yr",
+                help="Median earnings 10 years after entry when available.",
+            )
+
+            money_filter_1, money_filter_2 = st.columns(2)
+            money_filter_1.number_input(
+                "Max debt",
+                min_value=0,
+                max_value=max(0, median_debt_max),
+                step=1000,
+                key="filter_max_median_debt",
+                help=TOOLTIPS["median_debt"],
+            )
+            money_filter_2.number_input(
+                "Min aid savings",
+                min_value=0,
+                max_value=max(0, aid_savings_max),
+                step=500,
+                key="filter_min_estimated_aid_savings",
+                help="Estimated yearly cost before aid minus estimated yearly cost after aid.",
+            )
+            money_filter_3, money_filter_4 = st.columns(2)
+            money_filter_3.number_input(
+                "Max cost before aid",
+                min_value=0,
+                max_value=max(0, cost_before_aid_max),
+                step=1000,
+                key="filter_max_cost_before_aid",
+                help=TOOLTIPS["cost_before_aid"],
+            )
+            money_filter_4.number_input(
+                "Max yearly over budget",
+                min_value=0,
+                max_value=max(0, budget_gap_max),
+                step=500,
+                key="filter_max_yearly_over_budget",
+                disabled=profile_settings["annual_family_budget"] <= 0,
+                help=TOOLTIPS["budget_gap"],
+            )
 
 selected_states = st.session_state["filter_states"]
 selected_regions = st.session_state["filter_regions"]
@@ -4226,8 +4407,24 @@ selected_cost_range = (
 )
 min_grad_rate = st.session_state["filter_min_grad_rate"]
 min_data_coverage = st.session_state["filter_min_data_coverage"]
+min_personalized_value = st.session_state["filter_min_personalized_value"]
+min_financial_survivability = st.session_state["filter_min_financial_survivability"]
+min_major_adjusted_value = st.session_state["filter_min_major_adjusted_value"]
+min_future_roi_score = st.session_state["filter_min_future_roi_score"]
+min_current_affordability = st.session_state["filter_min_current_affordability"]
+min_future_roi = st.session_state["filter_min_future_roi"]
+min_earnings_after_grad = st.session_state["filter_min_earnings_after_grad"]
+min_earnings_10yr = st.session_state["filter_min_earnings_10yr"]
+max_median_debt = st.session_state["filter_max_median_debt"]
+min_estimated_aid_savings = st.session_state["filter_min_estimated_aid_savings"]
+max_cost_before_aid = st.session_state["filter_max_cost_before_aid"]
+max_yearly_over_budget = st.session_state["filter_max_yearly_over_budget"]
+min_confidence_score = st.session_state["filter_min_confidence_score"]
+min_program_value = st.session_state["filter_min_program_value"]
+min_program_earnings = st.session_state["filter_min_program_earnings"]
 
 filtered = scenario_df.copy()
+filtered["estimated_aid_savings"] = (filtered["cost_before_aid"] - filtered["cost_after_aid"]).clip(lower=0)
 if selected_states:
     filtered = filtered[filtered["state"].isin(selected_states)]
 if selected_regions:
@@ -4245,9 +4442,33 @@ if only_program_matches:
 filtered = filtered[
     filtered["student_size"].between(selected_student_range[0], selected_student_range[1])
     & filtered["cost_after_aid"].between(selected_cost_range[0], selected_cost_range[1])
+    & (filtered["need_value_score"] >= min_personalized_value)
+    & (filtered["financial_survivability_score"] >= min_financial_survivability)
+    & (filtered["roi_score"] >= min_future_roi_score)
+    & (filtered["current_affordability_score"] >= min_current_affordability)
+    & (filtered["future_roi_score"] >= min_future_roi)
     & (filtered["graduation_rate"] >= min_grad_rate / 100)
     & (filtered["data_coverage"] >= min_data_coverage)
+    & (filtered["estimate_confidence_score"] >= min_confidence_score)
 ]
+if max_cost_before_aid < cost_before_aid_max:
+    filtered = filtered[filtered["cost_before_aid"] <= max_cost_before_aid]
+if min_earnings_after_grad > 0:
+    filtered = filtered[filtered["earnings_after_grad"] >= min_earnings_after_grad]
+if min_earnings_10yr > 0:
+    filtered = filtered[filtered["earnings_10yr_used"] >= min_earnings_10yr]
+if max_median_debt < median_debt_max:
+    filtered = filtered[filtered["median_debt"] <= max_median_debt]
+if min_estimated_aid_savings > 0:
+    filtered = filtered[filtered["estimated_aid_savings"] >= min_estimated_aid_savings]
+if profile_settings["academic_focus"]:
+    filtered = filtered[filtered["focus_adjusted_score"] >= min_major_adjusted_value]
+    if min_program_value > 0:
+        filtered = filtered[filtered["program_value_score"].fillna(-1) >= min_program_value]
+    if min_program_earnings > 0:
+        filtered = filtered[filtered["program_earnings_1yr"].fillna(-1) >= min_program_earnings]
+if profile_settings["annual_family_budget"] > 0:
+    filtered = filtered[filtered["annual_budget_gap"].fillna(float("inf")) <= max_yearly_over_budget]
 
 if active_page == "Explorer":
     col1, col2, col3, col4 = st.columns(4)
