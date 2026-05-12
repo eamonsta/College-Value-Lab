@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "processed" / "college_roi_clean.csv"
 PROGRAM_DATA_PATH = ROOT / "data" / "processed" / "college_programs_clean.csv"
 MERIT_AID_DATA_PATH = ROOT / "data" / "processed" / "college_merit_aid_clean.csv"
-DATA_SCHEMA_VERSION = 3
-PROGRAM_SCHEMA_VERSION = 2
+DATA_SCHEMA_VERSION = 4
+PROGRAM_SCHEMA_VERSION = 3
 MERIT_AID_SOURCE_URL = "https://www.collegetransitions.com/dataverse/merit-aid/"
 
 NICKNAMES = {
@@ -458,6 +458,26 @@ def major_earnings_difference_label(delta, percent_delta):
     return "Matches school median"
 
 
+def debt_risk_label(median_debt, max_debt, earnings_after_grad):
+    if pd.isna(median_debt):
+        return "Debt data unavailable"
+    signals = []
+    if max_debt > 0:
+        if median_debt <= max_debt:
+            signals.append(f"under debt limit by {money(max_debt - median_debt)}")
+        else:
+            signals.append(f"over debt limit by {money(median_debt - max_debt)}")
+    ratio = debt_to_earnings_ratio(median_debt, earnings_after_grad)
+    if pd.notna(ratio):
+        if ratio <= 0.35:
+            signals.append("manageable vs earnings")
+        elif ratio <= 0.60:
+            signals.append("watch vs earnings")
+        else:
+            signals.append("high vs earnings")
+    return "; ".join(signals) if signals else "Add debt limit for risk"
+
+
 def annual_budget_gap(cost_after_aid, yearly_budget):
     if yearly_budget <= 0 or pd.isna(cost_after_aid):
         return float("nan")
@@ -850,7 +870,7 @@ TOOLTIPS = {
     "selected_earnings": "Median earnings used in the table or chart. The app now shows both earnings after graduation and earnings 10 years later instead of using a timeline filter.",
     "median_earnings_10yr": "Median earnings 10 years after students first entered the college.",
     "need_value_score": "Personalized 0-100 value score for cost-sensitive students. Higher is better. It uses estimated yearly cost after aid, budget fit, debt, graduation rate, earnings, and profile settings.",
-    "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It blends Need Value with major/program-level earnings and debt when available.",
+    "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It blends Personalized Value with major/program-level earnings and debt when available.",
     "financial_survivability": "Personalized 0-100 safety score asking: can this student realistically afford and finish this college without taking on unsafe debt? It uses yearly budget fit, debt stress, graduation rate, and estimate trust.",
     "roi_score": "0-100 payoff score compared with other rows in this dataset. It uses reported early earnings and 10-year earnings, not lifetime earnings. Higher is better.",
     "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is not lifetime earnings.",
@@ -1604,7 +1624,7 @@ def add_program_focus(data, program_data_updated_at, profile):
         axis=1,
     )
     data["program_earnings_vs_school"] = data["program_earnings_1yr"] - data["earnings_after_grad"]
-    data["program_earnings_vs_school_pct"] = data["program_earnings_vs_school"] / data["earnings_after_grad"].replace(0, np.nan)
+    data["program_earnings_vs_school_pct"] = data["program_earnings_vs_school"] / data["earnings_after_grad"].replace(0, float("nan"))
     data["program_earnings_vs_school_label"] = data.apply(
         lambda row: major_earnings_difference_label(row["program_earnings_vs_school"], row["program_earnings_vs_school_pct"]),
         axis=1,
@@ -1679,7 +1699,7 @@ def show_college_profile(row):
         f"Why: {row['estimate_confidence_notes'] or 'core public fields are available.'}"
     )
     score_to_show = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
-    score_label = "Major-Adjusted Value" if profile["academic_focus"] else "Need Value Score"
+    score_label = "Major-Adjusted Value" if profile["academic_focus"] else "Personalized Value Score"
     score_to_explain = row["focus_adjusted_score"] if profile["academic_focus"] else row["need_value_score"]
     st.caption(
         f"Score interpretation: {score_band_label(score_to_explain)}. "
@@ -1820,7 +1840,7 @@ def show_selected_college(data):
             f"{pct(selected_row['on_time_completion_rate'])}."
         )
         plain_markdown_text(
-            "The Need Value Score combines earnings, cost after aid, debt, and graduation outcomes. "
+            "The Personalized Value Score combines earnings, cost after aid, debt, and graduation outcomes. "
             "If you filled out Personal Profile, it also adjusts around your budget, debt comfort, "
             "home state, and affordability pressure."
         )
@@ -1852,7 +1872,7 @@ def add_selected_school(row, show_message=True):
             "Status": "Considering",
             "Financial Survivability": row.get("financial_survivability_score"),
             "Survivability Label": row.get("financial_survivability_label"),
-            "Need Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
+            "Personalized Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
             "Budget/Value Status": row["risk_label"],
             "Estimated Cost After Aid": row["cost_after_aid"],
             "Yearly Over/Under Budget": row["annual_budget_gap"],
@@ -1899,7 +1919,7 @@ def refresh_selected_school_data(selected, scenario_data):
                 "State": row["state"],
                 "Financial Survivability": row.get("financial_survivability_score"),
                 "Survivability Label": row.get("financial_survivability_label"),
-                "Need Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
+                "Personalized Value Score": round(row["need_value_score"], 0) if pd.notna(row["need_value_score"]) else None,
                 "Budget/Value Status": row["risk_label"],
                 "Estimated Cost After Aid": row["cost_after_aid"],
                 "Yearly Over/Under Budget": row["annual_budget_gap"],
@@ -1935,7 +1955,7 @@ def refresh_selected_school_data(selected, scenario_data):
 def show_personal_profile_page():
     st.subheader("Personal Profile")
     st.caption(
-        "Optional. These inputs personalize Need Value Score around current affordability, future payoff, debt safety, and completion risk."
+        "Start here. Your profile changes cost estimates, aid assumptions, residency, major outcomes, admissions realism, budget fit, and which columns matter most in Explorer."
     )
 
     st.markdown("##### Quick scoring presets")
@@ -2351,6 +2371,7 @@ def show_selected_schools_page(scenario_data):
         "Focus-Adjusted Score": "Major-Adjusted Value",
         "Estimate Confidence": "Estimate Trust Level",
         "Data Warning": "Missing Data Warning",
+        "Need Value Score": "Personalized Value Score",
     }
     for old_name, new_name in rename_for_clarity.items():
         if old_name in selected_table.columns and new_name not in selected_table.columns:
@@ -2409,9 +2430,11 @@ def show_selected_schools_page(scenario_data):
     for column in ["Program Match", "Program Earnings", "Program Debt", "Program Value", "Major Earnings Difference", "Major Earnings Difference %", "Major Earnings vs School"]:
         if column not in selected_table.columns:
             selected_table[column] = None
-    score_for_decision = selected_table["Need Value Score"]
+    if "Personalized Value Score" not in selected_table.columns:
+        selected_table["Personalized Value Score"] = None
+    score_for_decision = selected_table["Personalized Value Score"]
     if profile["academic_focus"]:
-        score_for_decision = selected_table["Major-Adjusted Value"].fillna(selected_table["Need Value Score"])
+        score_for_decision = selected_table["Major-Adjusted Value"].fillna(selected_table["Personalized Value Score"])
     official_calculator_cost = pd.to_numeric(selected_table["Official Calculator Estimate"], errors="coerce")
     public_estimated_cost = pd.to_numeric(selected_table["Estimated Cost After Aid"], errors="coerce")
     selected_table["Cost Used In Decision"] = official_calculator_cost.fillna(public_estimated_cost)
@@ -2570,7 +2593,7 @@ def show_selected_schools_page(scenario_data):
             "Yearly Over/Under Budget",
             "Four-Year Gap",
             "Personal Fit",
-            "Need Value Score",
+            "Personalized Value Score",
             "Major-Adjusted Value",
             "Future ROI Score",
             "ROI Rating",
@@ -2610,7 +2633,7 @@ def show_selected_schools_page(scenario_data):
             "Financial Survivability",
             "Survivability Label",
             "Admissions Category",
-            "Need Value Score",
+            "Personalized Value Score",
             "Major-Adjusted Value",
             "Focus Match",
             "Budget/Value Status",
@@ -2725,7 +2748,7 @@ def show_selected_schools_page(scenario_data):
                 help="Matched major earnings difference as a percent of the school's overall early-career median earnings.",
             ),
             "Program Value": st.column_config.ProgressColumn("Program Value (0-100)", format="%.0f", min_value=0, max_value=100),
-            "Need Value Score": st.column_config.ProgressColumn("Need Value Score (0-100)", format="%.0f", min_value=0, max_value=100, help=TOOLTIPS["need_value_score"]),
+            "Personalized Value Score": st.column_config.ProgressColumn("Personalized Value Score (0-100)", format="%.0f", min_value=0, max_value=100, help=TOOLTIPS["need_value_score"]),
             "Major-Adjusted Value": st.column_config.ProgressColumn("Major-Adjusted Value (0-100)", format="%.0f", min_value=0, max_value=100, help=TOOLTIPS["focus_adjusted_score"]),
             "Focus Match": st.column_config.TextColumn(help="Whether the selected academic focus has a matching program row."),
             "Personal Fit": st.column_config.NumberColumn(
@@ -3055,8 +3078,8 @@ def show_methodology_page():
     score_table = pd.DataFrame(
         [
             ["Financial Survivability", "Memorable safety score: can this student realistically afford and finish this school without unsafe debt?", "0-100, higher is safer", "Yearly budget fit, debt stress, graduation rate, and estimate trust. Large budget gaps cap the score."],
-            ["Need Value Score", "Main personalized score for cost-sensitive students.", "0-100, higher is better", "Estimated yearly cost after aid, budget fit, debt, graduation, earnings, home-state fit."],
-            ["Major-Adjusted Value", "Main score when Academic focus is entered.", "0-100, higher is better", "60% Need Value and 40% Program Value when program data exists. Schools without matching program data receive a penalty."],
+            ["Personalized Value Score", "Main personalized comparison score for the entered profile.", "0-100, higher is better", "Estimated yearly cost after aid, budget fit, debt, graduation, earnings, home-state fit, and profile priorities."],
+            ["Major-Adjusted Value", "Main score when Academic focus is entered.", "0-100, higher is better", "60% Personalized Value and 40% Program Value when program data exists. Schools without matching program data receive a penalty."],
             ["Future ROI Score", "Standardized future payoff score.", "0-100, higher is better", "Percentile rank of the raw ROI Index compared with other rows. 85+ excellent, 70-84 strong, 50-69 mixed, under 50 weak."],
             ["Raw ROI Index", "Transparent formula behind ROI Score.", "ratio", "(10-year earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate."],
             ["Program Value", "Major/focus-specific value signal when field-of-study data exists.", "0-100", "Program earnings, program ROI, and lower program debt."],
@@ -3088,9 +3111,16 @@ def show_methodology_page():
         "Estimated cost after aid uses College Scorecard net price by family-income bracket when the user selects an income range "
         "and the school reports that field. If the user selects the no-need-aid option, the app uses full annual cost because "
         "some families will not receive need-based aid at expensive private colleges. Otherwise, it falls back to average net price. "
+        "Estimated Aid Savings is the estimated yearly cost before aid minus the estimated yearly cost after aid; it is a comparison signal, not a guaranteed scholarship or grant. "
         "If the user enters a home state, public colleges show the realistic residency scenario for that user: in-state for colleges in that state "
         "and out-of-state for public colleges elsewhere. If no home state is entered, the app shows both in-state and out-of-state scenarios. "
         "Because Scorecard does not provide perfect after-aid net price by residency, the out-of-state after-aid estimate adds the tuition difference to the estimated net price."
+    )
+
+    st.markdown("##### Debt display")
+    st.write(
+        "Raw median debt is kept as supporting evidence instead of a default table column because debt only makes sense in context. "
+        "The default Explorer shows Debt Risk when the profile includes a max comfortable debt or high debt concern; that label compares typical debt with the user's debt limit and early-career earnings."
     )
 
     st.markdown("##### Net price calculator companion")
@@ -3115,7 +3145,7 @@ def show_methodology_page():
     st.write(
         "Academic focus matching uses bachelor's-level 4-digit CIP field-of-study records. For common focuses like computer science, "
         "business, biology, nursing, economics, engineering, psychology, and education, the app uses CIP-code families to reduce bad fuzzy matches. "
-        "When a focus is entered, Explorer sorts by Major-Adjusted Value instead of plain Need Value Score, and Selected Schools uses that score in its Decision Score. "
+        "When a focus is entered, Explorer sorts by Major-Adjusted Value instead of plain Personalized Value Score, and Selected Schools uses that score in its Decision Score. "
         "Major Earnings Difference shows matched program earnings minus the school's overall early-career median earnings, so users can read major impact in dollars and percent instead of only a score. "
         "That comparison is descriptive public data, not proof that the major alone causes the difference. "
         "Earnings and debt can be missing because College Scorecard suppresses small or sensitive cells."
@@ -3149,7 +3179,7 @@ def show_cost_earnings_chart(data):
             "estimated_4yr_after_aid_cost": "Estimated 4-Year Cost After Aid ($)",
             "earnings_10yr_used": "Median Earnings 10 Years After Entry ($)",
             "graduation_rate": "Graduation Rate",
-            "need_value_score": "Need Value Score",
+            "need_value_score": "Personalized Value Score",
             "display_name": "College",
         }
     )
@@ -3167,9 +3197,9 @@ def show_cost_earnings_chart(data):
                 axis=alt.Axis(format="$,.0f", title="Median Earnings 10 Years After Entry"),
             ),
             color=alt.Color(
-                "Need Value Score:Q",
+                "Personalized Value Score:Q",
                 scale=alt.Scale(scheme="blues"),
-                legend=alt.Legend(format=".0f", title="Need Value Score"),
+                legend=alt.Legend(format=".0f", title="Personalized Value Score"),
             ),
             tooltip=[
                 "College:N",
@@ -3177,7 +3207,7 @@ def show_cost_earnings_chart(data):
                 alt.Tooltip("Estimated 4-Year Cost After Aid ($):Q", format="$,.0f"),
                 alt.Tooltip("Median Earnings 10 Years After Entry ($):Q", format="$,.0f"),
                 alt.Tooltip("Graduation Rate:Q", format=".1%"),
-                alt.Tooltip("Need Value Score:Q", format=".0f"),
+                alt.Tooltip("Personalized Value Score:Q", format=".0f"),
             ],
         )
         .interactive()
@@ -3185,9 +3215,15 @@ def show_cost_earnings_chart(data):
     st.altair_chart(chart, use_container_width=True)
 
 
-def show_college_browser(data, visible_rows=15):
+def show_college_browser(data, visible_rows=15, show_grad_priority=False):
     profile = get_profile_settings()
     show_program_columns = bool(profile["academic_focus"]) and data["program_match"].notna().any()
+    show_debt_priority = profile["max_comfortable_debt"] > 0 or profile["debt_importance"] >= 7
+    show_aid_priority = (
+        profile["aid_uncertainty"] >= 7
+        or profile["family_income_bracket"] not in [DEFAULT_INCOME_BRACKET, NO_NEED_AID_BRACKET]
+    )
+    show_grad_priority = show_grad_priority or profile["graduation_importance"] >= 7 or profile["first_gen"]
     table = data[
         [
             "scenario_id",
@@ -3196,6 +3232,7 @@ def show_college_browser(data, visible_rows=15):
             "risk_label",
             "financial_survivability_score",
             "financial_survivability_label",
+            "cost_before_aid",
             "cost_after_aid",
             "annual_budget_gap",
             "roi_score",
@@ -3223,6 +3260,7 @@ def show_college_browser(data, visible_rows=15):
             "merit_aid_signal",
             "merit_aid_percent",
             "merit_aid_average_award",
+            "net_price_calculator_url",
             "need_value_score",
             "data_coverage",
         ]
@@ -3234,7 +3272,8 @@ def show_college_browser(data, visible_rows=15):
             "risk_label": "Budget/Value Status",
             "financial_survivability_score": "Financial Survivability",
             "financial_survivability_label": "Survivability Label",
-            "cost_after_aid": "Yearly Estimated Cost After Aid",
+            "cost_before_aid": "Estimated Yearly Cost Before Aid",
+            "cost_after_aid": "Estimated Yearly Cost After Aid",
             "annual_budget_gap": "Yearly Over/Under Budget",
             "roi_score": "Future ROI Score",
             "roi_rating": "ROI Rating",
@@ -3261,91 +3300,115 @@ def show_college_browser(data, visible_rows=15):
             "merit_aid_signal": "Merit Aid Signal",
             "merit_aid_percent": "Merit Aid %",
             "merit_aid_average_award": "Avg Merit Award",
-            "need_value_score": "Need Value Score",
+            "net_price_calculator_url": "Official Calculator URL",
+            "need_value_score": "Personalized Value Score",
             "data_coverage": "Data Coverage",
         }
     )
     table["Grad Rate"] = table["Grad Rate"] * 100
     table["Debt / Early Earnings"] = table["Debt / Early Earnings"] * 100
     table["Major Earnings Difference %"] = table["Major Earnings Difference %"] * 100
+    table["Estimated Aid Savings"] = (table["Estimated Yearly Cost Before Aid"] - table["Estimated Yearly Cost After Aid"]).clip(lower=0)
+    table["Debt Risk"] = table.apply(
+        lambda row: debt_risk_label(row["Debt"], profile["max_comfortable_debt"], row["Earnings After Grad"]),
+        axis=1,
+    )
+    table["Official Calculator"] = table["Official Calculator URL"].apply(
+        lambda value: "Verify with calculator" if clean_url(value) else "Calculator link unavailable"
+    )
     show_budget_gap = profile["annual_family_budget"] > 0
     show_detailed_columns = st.toggle(
         "Show detailed table columns",
         value=False,
-        help="Turn this on for the score columns, confidence, data coverage, and extra program details. Off keeps the explorer focused on real costs and outcomes.",
+        help="Turn this on for supporting evidence like raw debt, data coverage, detailed ROI, merit-aid fields, and confidence score.",
     )
     st.caption(
-        "Default view shows decision numbers first: yearly cost, budget gap, admissions fit, earnings, debt, and graduation rate. "
-        "The app still sorts with its model, but the score columns are hidden unless you open detailed columns."
+        "Default columns change based on your profile. The score comes first for comparison; the next columns show the real numbers behind it: cost, aid savings, budget fit, program earnings, and profile-specific risks."
     )
     column_order = [
         "College name",
         "State",
-        "Yearly Estimated Cost After Aid",
-        "Yearly Over/Under Budget",
-        "Budget/Value Status",
+        "Personalized Value Score",
+        "Financial Survivability",
+        "Estimated Yearly Cost Before Aid",
+        "Estimated Yearly Cost After Aid",
+        "Estimated Aid Savings",
         "Survivability Label",
+        "Budget/Value Status",
         "Admissions Category",
-        "Earnings After Grad",
-        "Earnings 10 Years Later",
-        "Debt",
-        "Grad Rate",
-        "Merit Aid Signal",
     ]
+    if show_budget_gap:
+        column_order.append("Yearly Over/Under Budget")
+    if show_grad_priority:
+        column_order.append("Grad Rate")
+    if show_debt_priority:
+        column_order.append("Debt Risk")
+    if show_aid_priority:
+        column_order.extend(["Confidence", "Official Calculator"])
     if show_detailed_columns:
         column_order.extend([
-            "Financial Survivability",
-            "Need Value Score",
+            "Earnings After Grad",
+            "Earnings 10 Years Later",
+            "Debt",
+            "Debt / Early Earnings",
             "Future ROI Score",
             "ROI Rating",
             "Admissions Selectivity",
             "Academic Profile Signal",
+            "Merit Aid Signal",
             "Merit Aid %",
             "Avg Merit Award",
-            "Debt / Early Earnings",
-            "Confidence",
+            "Confidence Score",
             "Missing Data Warning",
             "Data Coverage",
         ])
-    if not show_budget_gap:
-        column_order.remove("Yearly Over/Under Budget")
     if show_program_columns:
         column_order = [
             "College name",
             "State",
-            "Yearly Estimated Cost After Aid",
-            "Yearly Over/Under Budget",
-            "Budget/Value Status",
+            "Major-Adjusted Value",
+            "Personalized Value Score",
+            "Financial Survivability",
+            "Estimated Yearly Cost Before Aid",
+            "Estimated Yearly Cost After Aid",
+            "Estimated Aid Savings",
+            "Program Match",
+            "Program Earnings",
+            "Major Earnings vs School",
             "Survivability Label",
             "Admissions Category",
-            "Program Match",
-            "Major Earnings vs School",
-            "Program Earnings",
-            "Program Debt",
-            "Earnings After Grad",
-            "Earnings 10 Years Later",
-            "Grad Rate",
-            "Merit Aid Signal",
         ]
+        if show_budget_gap:
+            column_order.append("Yearly Over/Under Budget")
+        if show_grad_priority:
+            column_order.append("Grad Rate")
+        if show_debt_priority:
+            column_order.append("Debt Risk")
+        if show_aid_priority:
+            column_order.extend(["Confidence", "Official Calculator"])
         if show_detailed_columns:
             column_order.extend([
-                "Financial Survivability",
-                "Major-Adjusted Value",
+                "Earnings After Grad",
+                "Earnings 10 Years Later",
+                "Program Debt",
                 "Program Value",
                 "Major Earnings Difference",
                 "Major Earnings Difference %",
                 "Future ROI Score",
+                "ROI Rating",
+                "Debt",
+                "Debt / Early Earnings",
                 "Focus Match",
                 "Admissions Selectivity",
                 "Academic Profile Signal",
+                "Merit Aid Signal",
                 "Merit Aid %",
                 "Avg Merit Award",
-                "Confidence",
+                "Confidence Score",
                 "Missing Data Warning",
                 "Data Coverage",
             ])
-        if not show_budget_gap:
-            column_order.remove("Yearly Over/Under Budget")
+    column_order = list(dict.fromkeys([column for column in column_order if column in table.columns]))
     visible_count = min(len(table), visible_rows)
     table_height = 38 + (visible_count + 1) * 35
 
@@ -3387,8 +3450,20 @@ def show_college_browser(data, visible_rows=15):
             "Survivability Label": st.column_config.TextColumn(
                 help="Plain-English label for whether this school looks financially survivable for the profile."
             ),
-            "Yearly Estimated Cost After Aid": st.column_config.NumberColumn("Yearly Estimated Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
+            "Estimated Yearly Cost Before Aid": st.column_config.NumberColumn("Est. Yearly Cost Before Aid", format="$%d", help=TOOLTIPS["cost_before_aid"]),
+            "Estimated Yearly Cost After Aid": st.column_config.NumberColumn("Est. Yearly Cost After Aid", format="$%d", help=TOOLTIPS["cost_after_aid"]),
+            "Estimated Aid Savings": st.column_config.NumberColumn(
+                "Est. Aid Savings",
+                format="$%d",
+                help="Estimated yearly cost before aid minus estimated yearly cost after aid. This is not a guaranteed aid offer.",
+            ),
             "Yearly Over/Under Budget": st.column_config.NumberColumn("Yearly Over/Under Budget", format="$%d", help=TOOLTIPS["budget_gap"]),
+            "Debt Risk": st.column_config.TextColumn(
+                help="Personalized debt signal using your max comfortable debt and early-career earnings, when available."
+            ),
+            "Official Calculator": st.column_config.TextColumn(
+                help="Whether this row has an official net price calculator link to verify your real school-specific estimate."
+            ),
             "Future ROI Score": st.column_config.ProgressColumn(
                 "Future ROI Score (0-100)",
                 help=TOOLTIPS["roi_score"],
@@ -3441,8 +3516,8 @@ def show_college_browser(data, visible_rows=15):
                 min_value=0,
                 max_value=100,
             ),
-            "Need Value Score": st.column_config.ProgressColumn(
-                "Need Value Score (0-100)",
+            "Personalized Value Score": st.column_config.ProgressColumn(
+                "Personalized Value Score (0-100)",
                 help=TOOLTIPS["need_value_score"],
                 format="%.0f",
                 min_value=0,
@@ -3852,7 +3927,7 @@ with st.sidebar:
         else:
             focus_matches = scenario_df["program_match"].notna().sum()
             st.caption(f"Academic focus matches: {focus_matches:,} college scenario(s).")
-            st.caption("With an Academic focus entered, Explorer sorts by Major-Adjusted Value instead of plain Need Value Score.")
+            st.caption("With an Academic focus entered, Explorer sorts by Major-Adjusted Value instead of plain Personalized Value Score.")
             only_program_matches = st.checkbox(
                 "Only show schools with matching program data",
                 value=False,
@@ -4025,25 +4100,21 @@ if not filtered.empty:
 plain_caption(
     f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
     "Costs shown in the app are yearly unless a label explicitly says 4-year. "
-    "Financial Survivability asks whether the college is realistic for the entered budget and debt comfort. "
-    "Need Value and Future ROI use both near-term earnings after graduation and 10-year earnings snapshots, not lifetime earnings. "
+    "The score is the first comparison signal, but the table backs it up with readable numbers: cost before aid, cost after aid, estimated aid savings, budget fit, program earnings, and profile-specific risks. "
     f"{describe_score_mode(profile_settings)}"
 )
 
-why_tab, profile_tab, explorer_tab, selected_tab, validation_tab, methodology_tab, roadmap_tab = st.tabs(
+profile_tab, explorer_tab, selected_tab, validation_tab, methodology_tab, roadmap_tab, why_tab = st.tabs(
     [
-        "Why This Project",
         "Personal Profile",
         "Explorer",
         "Selected Schools",
         "Validation & Testing",
         "Methodology",
         "Build Roadmap",
+        "Why This Project",
     ]
 )
-
-with why_tab:
-    show_why_project_page()
 
 with profile_tab:
     show_personal_profile_page()
@@ -4051,10 +4122,11 @@ with profile_tab:
 with explorer_tab:
     st.subheader("College ROI Explorer")
     st.caption(
-        "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Need Value Score."
+        "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Personalized Value Score."
     )
     st.info(
         "Quick read: earnings are reported snapshots, not lifetime earnings. Future ROI uses school-wide early and 10-year earnings. "
+        "The score appears first for comparison, then the table shows the numbers a reader can actually judge. "
         "If you enter an Academic focus, Major-Adjusted Value and Program Outcomes use major/focus-specific earnings and debt when public data is available."
     )
     header_col, search_col = st.columns([1, 2])
@@ -4076,9 +4148,13 @@ with explorer_tab:
         st.info("No colleges match the current filters. Try widening the cost, size, or graduation-rate range.")
     else:
         st.caption("Click a row to open College Details below. Use the list control under the table to add schools.")
+        if not profile_has_personalization(profile_settings):
+            st.info(
+                "This table is using the public/default scoring recipe. Fill out Personal Profile to personalize cost, aid, residency, major outcomes, admissions fit, and which columns appear first."
+            )
         if profile_settings["annual_family_budget"] <= 0:
             st.info("Add the yearly amount your family can actually pay in Personal Profile to show Yearly Over/Under Budget in the table.")
-        show_college_browser(table_view)
+        show_college_browser(table_view, show_grad_priority=min_grad_rate > 0)
         list_options = table_view["scenario_id"].tolist()
         display_names = table_view.set_index("scenario_id")["display_name"].to_dict()
         selected_table_ids = st.multiselect(
@@ -4120,3 +4196,6 @@ with methodology_tab:
 
 with roadmap_tab:
     show_build_roadmap_page()
+
+with why_tab:
+    show_why_project_page()
