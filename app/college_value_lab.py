@@ -506,24 +506,35 @@ def major_earnings_difference_label(delta, percent_delta):
     return "Matches school median"
 
 
-def debt_risk_label(median_debt, max_debt, earnings_after_grad):
-    if pd.isna(median_debt):
+def estimated_debt_need(yearly_cost, yearly_budget, fallback_debt):
+    if yearly_budget > 0 and pd.notna(yearly_cost):
+        return max(yearly_cost - yearly_budget, 0) * 4
+    return fallback_debt
+
+
+def debt_risk_label(estimated_debt, max_debt, earnings_after_grad, yearly_budget=0):
+    if pd.isna(estimated_debt):
         return "Debt data unavailable"
-    signals = []
+    if yearly_budget > 0:
+        if estimated_debt <= 0:
+            return "No borrowing expected from your budget"
+        signals = [f"Estimated borrowing need: {money(estimated_debt)}"]
+    else:
+        signals = [f"Typical student debt: {money(estimated_debt)}"]
     if max_debt > 0:
-        if median_debt <= max_debt:
-            signals.append(f"under debt limit by {money(max_debt - median_debt)}")
+        if estimated_debt <= max_debt:
+            signals.append(f"within your debt limit by {money(max_debt - estimated_debt)}")
         else:
-            signals.append(f"over debt limit by {money(median_debt - max_debt)}")
-    ratio = debt_to_earnings_ratio(median_debt, earnings_after_grad)
+            signals.append(f"over your debt limit by {money(estimated_debt - max_debt)}")
+    ratio = debt_to_earnings_ratio(estimated_debt, earnings_after_grad)
     if pd.notna(ratio):
         if ratio <= 0.35:
-            signals.append("manageable vs earnings")
+            signals.append("low compared with early earnings")
         elif ratio <= 0.60:
-            signals.append("watch vs earnings")
+            signals.append("moderate compared with early earnings")
         else:
-            signals.append("high vs earnings")
-    return "; ".join(signals) if signals else "Add debt limit for risk"
+            signals.append("high compared with early earnings")
+    return "; ".join(signals) if signals else "Add a debt limit for risk"
 
 
 def annual_budget_gap(cost_after_aid, yearly_budget):
@@ -870,7 +881,7 @@ def add_estimate_confidence(data, profile):
             row.get("cost_after_aid"),
             profile["annual_family_budget"],
             profile["max_comfortable_debt"],
-            row.get("median_debt"),
+            row.get("estimated_student_debt"),
             row.get("earnings_after_grad"),
             row.get("graduation_rate"),
             row.get("estimate_confidence_score"),
@@ -914,7 +925,8 @@ TOOLTIPS = {
     "residency": "Cost scenario used for the row. If you entered a home state, public colleges use in-state only for that state and out-of-state for other states. If no home state is entered, both scenarios are shown.",
     "graduation_rate": "College Scorecard graduation rate, generally completion within 150% of expected time. For bachelor's schools, that usually means within six years.",
     "on_time_completion_rate": "Completion within 100% of expected time. For bachelor's schools, that usually means within four years.",
-    "median_debt": "Median federal student loan debt among students who completed at that college.",
+    "median_debt": "Typical median federal student loan debt among students who completed at that college. This is public historical data, not what you personally must borrow.",
+    "estimated_student_debt": "Estimated total borrowing needed for this profile. If a yearly family budget is entered, this is the uncovered yearly cost multiplied by four; otherwise it falls back to typical median debt.",
     "selected_earnings": "Median earnings used in the table or chart. The app now shows both earnings after graduation and earnings 10 years later instead of using a timeline filter.",
     "median_earnings_10yr": "Median earnings 10 years after students first entered the college.",
     "need_value_score": "Personalized 0-100 value score for cost-sensitive students. Higher is better. It uses estimated yearly cost after aid, budget fit, debt, graduation rate, earnings, and profile settings.",
@@ -924,8 +936,8 @@ TOOLTIPS = {
     "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is not lifetime earnings.",
     "estimated_4yr_net_cost": "Estimated total after-aid cost for four years.",
     "student_size": "Undergraduate student enrollment reported by College Scorecard.",
-    "budget_gap": "Estimated yearly cost after aid minus the yearly amount your family can actually pay. Negative means under budget; positive means above budget.",
-    "debt_to_earnings": "Median debt divided by median earnings after graduation. Lower is safer because early earnings can cover debt more easily.",
+    "budget_gap": "Estimated yearly cost after aid minus the yearly amount covered without loans. Negative means under budget; positive means above budget.",
+    "debt_to_earnings": "Estimated debt need divided by median earnings after graduation. Lower is safer because early earnings can cover debt more easily.",
     "risk_label": "Plain-English financial status based on budget fit, payoff, debt, graduation rate, and data completeness.",
     "estimate_confidence": "Trust level for the app's estimate. High means stronger public cost/outcome/program evidence and a calculator link; Low means fallback data or missing key fields.",
     "net_price_calculator": "Official college net price calculator when College Scorecard reports a link. These school calculators use institutional data and should be checked before making application or enrollment decisions.",
@@ -1390,12 +1402,16 @@ def add_need_value_score(data, profile=None):
     data["earnings_10yr_percentile"] = percentile(data["earnings_10yr_used"])
     data["earnings_after_grad_percentile"] = percentile(data["earnings_after_grad"])
     data["affordability_percentile"] = percentile(data["cost_after_aid"], higher_is_better=False)
-    data["low_debt_percentile"] = percentile(data["median_debt"], higher_is_better=False)
+    data["estimated_student_debt"] = data.apply(
+        lambda row: estimated_debt_need(row["cost_after_aid"], profile["annual_family_budget"], row["median_debt"]),
+        axis=1,
+    )
+    data["low_debt_percentile"] = percentile(data["estimated_student_debt"], higher_is_better=False)
     data["graduation_percent"] = data["graduation_rate"] * 100
     data["budget_fit"] = data["cost_after_aid"].apply(
         lambda value: budget_fit_score(value, profile["annual_family_budget"])
     )
-    data["debt_fit"] = data["median_debt"].apply(
+    data["debt_fit"] = data["estimated_student_debt"].apply(
         lambda value: debt_fit_score(value, profile["max_comfortable_debt"])
     )
     data["home_state_fit"] = data.apply(
@@ -1451,11 +1467,11 @@ def add_need_value_score(data, profile=None):
             data["need_value_score"] - (data["affordability_gap_penalty"] * 0.35)
         ).apply(clamp_score)
     data["debt_to_earnings_after_grad"] = data.apply(
-        lambda row: debt_to_earnings_ratio(row["median_debt"], row["earnings_after_grad"]),
+        lambda row: debt_to_earnings_ratio(row["estimated_student_debt"], row["earnings_after_grad"]),
         axis=1,
     )
     data["debt_to_earnings_10yr"] = data.apply(
-        lambda row: debt_to_earnings_ratio(row["median_debt"], row["earnings_10yr_used"]),
+        lambda row: debt_to_earnings_ratio(row["estimated_student_debt"], row["earnings_10yr_used"]),
         axis=1,
     )
     data["debt_safety_label"] = data["debt_to_earnings_after_grad"].apply(debt_safety_label)
@@ -1785,7 +1801,7 @@ def show_college_profile(row):
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Earnings 10 Years Later", money(row["earnings_10yr_used"]), help="Median earnings 10 years after entry when available. This is not lifetime earnings.")
-    col2.metric("Median Debt", money(row["median_debt"]), help=TOOLTIPS["median_debt"])
+    col2.metric("Estimated Debt Need", money(row["estimated_student_debt"]), help=TOOLTIPS["estimated_student_debt"])
     col3.metric(
         "Debt / Early Earnings",
         pct(row["debt_to_earnings_after_grad"]),
@@ -1798,6 +1814,7 @@ def show_college_profile(row):
         f"{row['admissions_category']} for admissions, and {row['risk_label']} on budget/value. "
         f"{financial_survivability_summary(row['financial_survivability_label'])}"
     )
+    st.caption(f"Typical median debt at this college: {money(row['median_debt'])}. Your estimated debt need changes if your budget or calculator estimate covers more of the cost.")
     st.caption(
         f"Trust label: {row['estimate_confidence']} confidence ({number(row['estimate_confidence_score'])}/100). "
         f"Why: {row['estimate_confidence_notes'] or 'core public fields are available.'}"
@@ -1930,13 +1947,15 @@ def show_selected_college(data):
         four_year_after_aid = selected_row["estimated_4yr_after_aid_cost"]
         earnings_after_grad = selected_row["earnings_after_grad"]
         earnings_10yr = selected_row["earnings_10yr_used"]
+        estimated_debt = selected_row["estimated_student_debt"]
         median_debt = selected_row["median_debt"]
         debt_ratio = selected_row["debt_to_earnings_after_grad"]
         plain_note(
             f"For {selected_row['display_name']}, the estimated yearly cost after aid is "
             f"{money(yearly_after_aid)}, or about {money(four_year_after_aid)} over four years. "
             f"Median earnings after graduation are {money(earnings_after_grad)}, and median earnings "
-            f"10 years later are {money(earnings_10yr)}. Median debt among completers is {money(median_debt)}. "
+            f"10 years later are {money(earnings_10yr)}. Estimated borrowing need for this profile is "
+            f"{money(estimated_debt)}; typical median debt among completers is {money(median_debt)}. "
             f"Debt is about {pct(debt_ratio)} of early earnings, which this app labels as "
             f"{selected_row['debt_safety_label'].lower()}. "
             f"The graduation rate is "
@@ -1992,6 +2011,7 @@ def add_selected_school(row, show_message=True):
             "Calculator URL": row.get("net_price_calculator_url"),
             "Official Calculator Estimate": None,
             "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
+            "Estimated Student Debt": row.get("estimated_student_debt"),
             "Program Match": row.get("program_match"),
             "Program Earnings": row.get("program_earnings_1yr"),
             "Program Debt": row.get("program_debt"),
@@ -2039,6 +2059,7 @@ def refresh_selected_school_data(selected, scenario_data):
                 "Calculator URL": row.get("net_price_calculator_url"),
                 "Official Calculator Estimate": saved.get("Official Calculator Estimate"),
                 "Debt / Early Earnings": row["debt_to_earnings_after_grad"] * 100 if pd.notna(row["debt_to_earnings_after_grad"]) else None,
+                "Estimated Student Debt": row.get("estimated_student_debt"),
                 "Program Match": row.get("program_match"),
                 "Program Earnings": row.get("program_earnings_1yr"),
                 "Program Debt": row.get("program_debt"),
@@ -2135,15 +2156,15 @@ def show_personal_profile_page():
                 "This mode assumes little or no need-based aid. Cost after aid uses full annual cost before grants, scholarships, or merit aid."
             )
         st.session_state["annual_family_budget"] = st.number_input(
-            "Yearly amount your family can actually pay",
+            "Yearly amount covered without loans",
             min_value=0,
             max_value=150000,
             value=st.session_state.get("annual_family_budget", 0),
             step=1000,
-            help="This is not family income. It is the yearly amount available for college from savings, current income, or family support before loans.",
+            help="This is not family income. It is the yearly amount already covered by family support, savings, outside scholarships, employer benefits, or other non-loan money.",
         )
         st.caption(
-            "Important: family income estimates aid; yearly amount your family can pay determines whether a college is within budget."
+            "Important: family income estimates aid; yearly amount covered without loans determines whether a college is within budget and how much debt you may need."
         )
         st.session_state["max_comfortable_debt"] = st.number_input(
             "Maximum total debt you would feel comfortable taking",
@@ -2231,7 +2252,7 @@ def show_personal_profile_page():
     weights = need_value_weights(profile)
     st.markdown("##### Current score recipe")
     plain_note(
-        "Profile logic: family income estimates aid, the yearly amount your family can actually pay decides budget fit, "
+        "Profile logic: family income estimates aid, the yearly amount covered without loans decides budget fit and estimated borrowing need, "
         "and debt comfort decides debt safety. These are separate because a high-income family may still have a low college budget, "
         "or may be able to pay full cost without need-based aid."
     )
@@ -2549,6 +2570,8 @@ def show_selected_schools_page(scenario_data):
         selected_table["Debt / Early Earnings"] = None
     if "Median Debt" not in selected_table.columns:
         selected_table["Median Debt"] = None
+    if "Estimated Student Debt" not in selected_table.columns:
+        selected_table["Estimated Student Debt"] = None
     if "Graduation Rate" not in selected_table.columns:
         selected_table["Graduation Rate"] = None
     selected_table["Earnings After Grad"] = pd.to_numeric(
@@ -2579,18 +2602,28 @@ def show_selected_schools_page(scenario_data):
         lambda value: selected_school_cost_score(value, profile["annual_family_budget"])
     )
     selected_table["Median Debt"] = pd.to_numeric(selected_table["Median Debt"], errors="coerce")
-    estimated_debt = (
+    estimated_debt_from_ratio = (
         pd.to_numeric(selected_table["Debt / Early Earnings"], errors="coerce")
         / 100
         * pd.to_numeric(selected_table["Earnings After Grad"], errors="coerce")
     )
-    selected_table["Median Debt"] = selected_table["Median Debt"].fillna(estimated_debt)
+    selected_table["Median Debt"] = selected_table["Median Debt"].fillna(estimated_debt_from_ratio)
+    selected_table["Estimated Student Debt"] = selected_table.apply(
+        lambda row: estimated_debt_need(row["Cost Used In Decision"], profile["annual_family_budget"], row["Median Debt"]),
+        axis=1,
+    )
+    selected_table["Debt / Early Earnings"] = selected_table.apply(
+        lambda row: debt_to_earnings_ratio(row["Estimated Student Debt"], row["Earnings After Grad"]) * 100
+        if pd.notna(debt_to_earnings_ratio(row["Estimated Student Debt"], row["Earnings After Grad"]))
+        else None,
+        axis=1,
+    )
     selected_table["Financial Survivability"] = selected_table.apply(
         lambda row: financial_survivability_score_for_values(
             row["Cost Used In Decision"],
             profile["annual_family_budget"],
             profile["max_comfortable_debt"],
-            row.get("Median Debt"),
+            row.get("Estimated Student Debt"),
             row.get("Earnings After Grad"),
             row.get("Graduation Rate"),
             row.get("Estimate Trust Score"),
@@ -2665,7 +2698,7 @@ def show_selected_schools_page(scenario_data):
         )
     action_cols = st.columns(2)
     action_cols[0].metric("Schools Still Needing Official Calculator", calculators_needed, help="Selected schools where you have not entered an official net price calculator result yet.")
-    action_cols[1].metric("Schools Within Your Yearly Budget", within_budget, help="Selected schools at or below the yearly amount your family can actually pay, using the cost used for decisions.")
+    action_cols[1].metric("Schools Within Your Yearly Budget", within_budget, help="Selected schools at or below the yearly amount covered without loans, using the cost used for decisions.")
 
     balanced_shortlist_warnings(selected_table, profile)
 
@@ -2685,7 +2718,7 @@ def show_selected_schools_page(scenario_data):
         "Scores still help sort and compare, but they should not replace the official calculator result."
     )
     if not show_budget_gap:
-        st.info("Add the yearly amount your family can actually pay in Personal Profile to show Yearly Over/Under Budget.")
+        st.info("Add the yearly amount covered without loans in Personal Profile to show Yearly Over/Under Budget.")
     show_shortlist_details = st.toggle(
         "Show detailed shortlist columns",
         value=False,
@@ -2729,7 +2762,9 @@ def show_selected_schools_page(scenario_data):
             "ROI Rating",
             "Earnings After Grad",
             "Earnings 10 Years Later",
+            "Estimated Student Debt",
             "Debt / Early Earnings",
+            "Median Debt",
             "Estimate Trust Level",
             "Missing Data Warning",
             "Notes",
@@ -2781,6 +2816,8 @@ def show_selected_schools_page(scenario_data):
             "Future ROI Score",
             "ROI Rating",
             "Debt / Early Earnings",
+            "Estimated Student Debt",
+            "Median Debt",
             "Program Match",
             "Program Earnings",
             "Program Debt",
@@ -2841,7 +2878,7 @@ def show_selected_schools_page(scenario_data):
             "Yearly Over/Under Budget": st.column_config.NumberColumn(
                 "Yearly Over/Under Budget",
                 format="$%d",
-                help="Yearly Cost Used For Decisions minus the yearly amount your family can actually pay. Negative means under budget; positive means over budget.",
+                help="Yearly Cost Used For Decisions minus the yearly amount covered without loans. Negative means under budget; positive means over budget.",
             ),
             "Four-Year Gap": st.column_config.NumberColumn(
                 "Four-Year Over/Under Budget",
@@ -2862,8 +2899,10 @@ def show_selected_schools_page(scenario_data):
             ),
             "Debt / Early Earnings": st.column_config.NumberColumn(
                 format="%.0f%%",
-                help="Median debt divided by median early earnings. Lower is safer.",
+                help=TOOLTIPS["debt_to_earnings"],
             ),
+            "Estimated Student Debt": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["estimated_student_debt"]),
+            "Median Debt": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["median_debt"]),
             "Earnings After Grad": st.column_config.NumberColumn(format="$%d"),
             "Earnings 10 Years Later": st.column_config.NumberColumn(format="$%d"),
             "Program Earnings": st.column_config.NumberColumn(format="$%d"),
@@ -3258,8 +3297,10 @@ def show_methodology_page():
 
     st.markdown("##### Debt display")
     st.write(
-        "Raw median debt is kept as supporting evidence instead of a default table column because debt only makes sense in context. "
-        "The default Explorer shows Debt Risk when the profile includes a max comfortable debt or high debt concern; that label compares typical debt with the user's debt limit and early-career earnings."
+        "Raw median debt is kept as supporting evidence because debt only makes sense in context. "
+        "The app estimates personal debt need from the user's yearly budget: uncovered yearly cost multiplied by four. "
+        "If no budget is entered, it falls back to the college's typical median debt. "
+        "Debt Need / Risk then compares that estimated borrowing need with the user's debt limit and early-career earnings."
     )
 
     st.markdown("##### Net price calculator companion")
@@ -3379,6 +3420,7 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
             "earnings_after_grad",
             "earnings_10yr_used",
             "graduation_rate",
+            "estimated_student_debt",
             "median_debt",
             "debt_to_earnings_after_grad",
             "program_match",
@@ -3419,6 +3461,7 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
             "earnings_after_grad": "Earnings After Grad",
             "earnings_10yr_used": "Earnings 10 Years Later",
             "graduation_rate": "Grad Rate",
+            "estimated_student_debt": "Estimated Debt Need",
             "median_debt": "Debt",
             "debt_to_earnings_after_grad": "Debt / Early Earnings",
             "program_match": "Program Match",
@@ -3449,7 +3492,12 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
     table["Major Earnings Difference %"] = table["Major Earnings Difference %"] * 100
     table["Estimated Aid Savings"] = (table["Estimated Yearly Cost Before Aid"] - table["Estimated Yearly Cost After Aid"]).clip(lower=0)
     table["Debt Risk"] = table.apply(
-        lambda row: debt_risk_label(row["Debt"], profile["max_comfortable_debt"], row["Earnings After Grad"]),
+        lambda row: debt_risk_label(
+            row["Estimated Debt Need"],
+            profile["max_comfortable_debt"],
+            row["Earnings After Grad"],
+            profile["annual_family_budget"],
+        ),
         axis=1,
     )
     table["Official Calculator"] = table["Official Calculator URL"].apply(
@@ -3488,6 +3536,7 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
         column_order.extend([
             "Earnings After Grad",
             "Earnings 10 Years Later",
+            "Estimated Debt Need",
             "Debt",
             "Debt / Early Earnings",
             "Future ROI Score",
@@ -3534,6 +3583,7 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
                 "Major Earnings Difference %",
                 "Future ROI Score",
                 "ROI Rating",
+                "Estimated Debt Need",
                 "Debt",
                 "Debt / Early Earnings",
                 "Focus Match",
@@ -3597,7 +3647,8 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
             ),
             "Yearly Over/Under Budget": st.column_config.NumberColumn("Yearly Over/Under Budget", format="$%d", help=TOOLTIPS["budget_gap"]),
             "Debt Risk": st.column_config.TextColumn(
-                help="Personalized debt signal using your max comfortable debt and early-career earnings, when available."
+                "Debt Need / Risk",
+                help="Plain-English debt signal using estimated borrowing need, your max comfortable debt, and early-career earnings.",
             ),
             "Official Calculator": st.column_config.TextColumn(
                 help="Whether this row has an official net price calculator link to verify your real school-specific estimate."
@@ -3623,7 +3674,8 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
             "Earnings After Grad": st.column_config.NumberColumn(format="$%d", help="Median earnings 1 year after graduation when available."),
             "Earnings 10 Years Later": st.column_config.NumberColumn(format="$%d", help="Median earnings 10 years after entry when available."),
             "Grad Rate": st.column_config.NumberColumn(format="%.1f%%", help=TOOLTIPS["graduation_rate"]),
-            "Debt": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["median_debt"]),
+            "Estimated Debt Need": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["estimated_student_debt"]),
+            "Debt": st.column_config.NumberColumn("Typical Median Debt", format="$%d", help=TOOLTIPS["median_debt"]),
             "Debt / Early Earnings": st.column_config.NumberColumn(format="%.0f%%", help=TOOLTIPS["debt_to_earnings"]),
             "Program Match": st.column_config.TextColumn(help="Best matching bachelor's program for your Academic focus."),
             "Focus Match": st.column_config.TextColumn(help="Whether the academic focus matched a bachelor's program row."),
@@ -4093,7 +4145,7 @@ cost_max = int(valid_costs.max())
 valid_before_aid_costs = scenario_df["cost_before_aid"].dropna()
 valid_earnings_after_grad = scenario_df["earnings_after_grad"].dropna()
 valid_earnings_10yr = scenario_df["earnings_10yr_used"].dropna()
-valid_debts = scenario_df["median_debt"].dropna()
+valid_debts = scenario_df["estimated_student_debt"].dropna()
 valid_aid_savings = (scenario_df["cost_before_aid"] - scenario_df["cost_after_aid"]).clip(lower=0).dropna()
 valid_program_earnings = scenario_df["program_earnings_1yr"].dropna()
 cost_before_aid_max = int(valid_before_aid_costs.max()) if not valid_before_aid_costs.empty else cost_max
@@ -4361,12 +4413,12 @@ if active_page == "Explorer":
 
             money_filter_1, money_filter_2 = st.columns(2)
             money_filter_1.number_input(
-                "Max debt",
+                "Max estimated debt need",
                 min_value=0,
                 max_value=max(0, median_debt_max),
                 step=1000,
                 key="filter_max_median_debt",
-                help=TOOLTIPS["median_debt"],
+                help=TOOLTIPS["estimated_student_debt"],
             )
             money_filter_2.number_input(
                 "Min aid savings",
@@ -4470,7 +4522,7 @@ if min_earnings_after_grad > 0:
 if min_earnings_10yr > 0:
     filtered = filtered[filtered["earnings_10yr_used"] >= min_earnings_10yr]
 if max_median_debt < median_debt_max:
-    filtered = filtered[filtered["median_debt"] <= max_median_debt]
+    filtered = filtered[filtered["estimated_student_debt"] <= max_median_debt]
 if min_estimated_aid_savings > 0:
     filtered = filtered[filtered["estimated_aid_savings"] >= min_estimated_aid_savings]
 if profile_settings["academic_focus"]:
@@ -4549,7 +4601,7 @@ elif active_page == "Explorer":
                 "This table is using the public/default scoring recipe. Fill out Personal Profile to personalize cost, aid, residency, major outcomes, admissions fit, and which columns appear first."
             )
         if profile_settings["annual_family_budget"] <= 0:
-            st.info("Add the yearly amount your family can actually pay in Personal Profile to show Yearly Over/Under Budget in the table.")
+            st.info("Add the yearly amount covered without loans in Personal Profile to show Yearly Over/Under Budget in the table.")
         show_college_browser(table_view, show_grad_priority=min_grad_rate > 0)
         list_options = table_view["scenario_id"].tolist()
         display_names = table_view.set_index("scenario_id")["display_name"].to_dict()
