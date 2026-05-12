@@ -2741,6 +2741,8 @@ def show_selected_schools_page(scenario_data):
     if not profile["academic_focus"]:
         if "Major-Adjusted Value" in selected_column_order:
             selected_column_order.remove("Major-Adjusted Value")
+    elif "Personalized Value Score" in selected_column_order:
+        selected_column_order.remove("Personalized Value Score")
     if selected_table["Program Match"].notna().any():
         program_columns = ["Major Earnings vs School", "Major Earnings Difference", "Major Earnings Difference %", "Program Value", "Program Match", "Focus Match", "Program Earnings", "Program Debt"]
         if show_shortlist_details:
@@ -3504,7 +3506,6 @@ def show_college_browser(data, visible_rows=15, show_grad_priority=False):
             "College name",
             "State",
             "Major-Adjusted Value",
-            "Personalized Value Score",
             "Financial Survivability",
             "Estimated Yearly Cost Before Aid",
             "Estimated Yearly Cost After Aid",
@@ -4186,31 +4187,41 @@ if active_page == "Explorer":
 
         st.markdown("##### Score filters")
         st.caption("Use these when you want schools that clear a score floor, like all main scores 80+.")
-        score_col_1, score_col_2 = st.columns(2)
-        score_col_1.slider(
-            "Min Personalized Value",
-            0,
-            100,
-            key="filter_min_personalized_value",
-            step=5,
-            help=TOOLTIPS["need_value_score"],
-        )
-        score_col_2.slider(
-            "Min Financial Survivability",
-            0,
-            100,
-            key="filter_min_financial_survivability",
-            step=5,
-            help=TOOLTIPS["financial_survivability"],
-        )
         if profile_settings["academic_focus"]:
-            st.slider(
+            score_col_1, score_col_2 = st.columns(2)
+            score_col_1.slider(
                 "Min Major-Adjusted Value",
                 0,
                 100,
                 key="filter_min_major_adjusted_value",
                 step=5,
                 help=TOOLTIPS["focus_adjusted_score"],
+            )
+            score_col_2.slider(
+                "Min Financial Survivability",
+                0,
+                100,
+                key="filter_min_financial_survivability",
+                step=5,
+                help=TOOLTIPS["financial_survivability"],
+            )
+        else:
+            score_col_1, score_col_2 = st.columns(2)
+            score_col_1.slider(
+                "Min Personalized Value",
+                0,
+                100,
+                key="filter_min_personalized_value",
+                step=5,
+                help=TOOLTIPS["need_value_score"],
+            )
+            score_col_2.slider(
+                "Min Financial Survivability",
+                0,
+                100,
+                key="filter_min_financial_survivability",
+                step=5,
+                help=TOOLTIPS["financial_survivability"],
             )
 
         st.caption("Ownership")
@@ -4442,7 +4453,6 @@ if only_program_matches:
 filtered = filtered[
     filtered["student_size"].between(selected_student_range[0], selected_student_range[1])
     & filtered["cost_after_aid"].between(selected_cost_range[0], selected_cost_range[1])
-    & (filtered["need_value_score"] >= min_personalized_value)
     & (filtered["financial_survivability_score"] >= min_financial_survivability)
     & (filtered["roi_score"] >= min_future_roi_score)
     & (filtered["current_affordability_score"] >= min_current_affordability)
@@ -4451,6 +4461,8 @@ filtered = filtered[
     & (filtered["data_coverage"] >= min_data_coverage)
     & (filtered["estimate_confidence_score"] >= min_confidence_score)
 ]
+if not profile_settings["academic_focus"]:
+    filtered = filtered[filtered["need_value_score"] >= min_personalized_value]
 if max_cost_before_aid < cost_before_aid_max:
     filtered = filtered[filtered["cost_before_aid"] <= max_cost_before_aid]
 if min_earnings_after_grad > 0:
