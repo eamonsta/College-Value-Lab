@@ -21,8 +21,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_PATH = ROOT / "data" / "processed" / "college_roi_clean.csv"
 PROGRAM_DATA_PATH = ROOT / "data" / "processed" / "college_programs_clean.csv"
 MERIT_AID_DATA_PATH = ROOT / "data" / "processed" / "college_merit_aid_clean.csv"
-DATA_SCHEMA_VERSION = 2
-PROGRAM_SCHEMA_VERSION = 1
+DATA_SCHEMA_VERSION = 3
+PROGRAM_SCHEMA_VERSION = 2
 MERIT_AID_SOURCE_URL = "https://www.collegetransitions.com/dataverse/merit-aid/"
 
 NICKNAMES = {
