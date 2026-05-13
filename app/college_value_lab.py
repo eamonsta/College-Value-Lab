@@ -151,6 +151,16 @@ FILTER_STATE_KEYS = [
     "filter_min_program_earnings",
 ]
 
+PROFILE_FILTER_SIGNATURE_KEYS = [
+    "home_state",
+    "family_income_bracket",
+    "academic_focus",
+    "annual_family_budget",
+    "max_comfortable_debt",
+]
+
+FILTER_DEFAULTS_VERSION = 2
+
 INCOME_BRACKET_ALIASES = {
     "110k+": "$110k+ with possible need-based aid",
     "$110k+": "$110k+ with possible need-based aid",
@@ -926,12 +936,12 @@ TOOLTIPS = {
     "graduation_rate": "College Scorecard graduation rate, generally completion within 150% of expected time. For bachelor's schools, that usually means within six years.",
     "on_time_completion_rate": "Completion within 100% of expected time. For bachelor's schools, that usually means within four years.",
     "median_debt": "Typical median federal student loan debt among students who completed at that college. This is public historical data, not what you personally must borrow.",
-    "estimated_student_debt": "Estimated total borrowing needed for this profile. If a yearly family budget is entered, this is the uncovered yearly cost multiplied by four; otherwise it falls back to typical median debt.",
+    "estimated_student_debt": "Estimated total borrowing needed for this profile. If a yearly amount covered without loans is entered, this is the uncovered yearly cost multiplied by four; otherwise it falls back to typical median debt.",
     "selected_earnings": "Median earnings used in the table or chart. The app now shows both earnings after graduation and earnings 10 years later instead of using a timeline filter.",
     "median_earnings_10yr": "Median earnings 10 years after students first entered the college.",
-    "need_value_score": "Personalized 0-100 value score for cost-sensitive students. Higher is better. It uses estimated yearly cost after aid, budget fit, debt, graduation rate, earnings, and profile settings.",
-    "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It blends Personalized Value with major/program-level earnings and debt when available.",
-    "financial_survivability": "Personalized 0-100 safety score asking: can this student realistically afford and finish this college without taking on unsafe debt? It uses yearly budget fit, debt stress, graduation rate, and estimate trust.",
+    "need_value_score": "Personalized 0-100 value score. Higher is better. If cost is covered without loans, affordability is treated as satisfied and the score shifts toward earnings, graduation, debt safety, and profile priorities.",
+    "focus_adjusted_score": "Personalized 0-100 value score when Academic focus is entered. Higher is better. It becomes the main score and gives more weight to matched program earnings when the college is affordable for the profile.",
+    "financial_survivability": "Personalized 0-100 safety score asking: can this student realistically afford this college without unsafe debt? If cost is covered without loans, this should be close to 100 unless data quality or completion risk is weak.",
     "roi_score": "0-100 payoff score compared with other rows in this dataset. It uses reported early earnings and 10-year earnings, not lifetime earnings. Higher is better.",
     "roi_index": "Raw future ROI ratio: (10-year median earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate. This is not lifetime earnings.",
     "estimated_4yr_net_cost": "Estimated total after-aid cost for four years.",
@@ -1040,6 +1050,41 @@ def debt_stress_score(median_debt, earnings_after_grad):
     return clamp_score(100 - (ratio * 120))
 
 
+def cost_is_covered(yearly_cost, yearly_budget):
+    return yearly_budget > 0 and pd.notna(yearly_cost) and yearly_cost <= yearly_budget
+
+
+def current_affordability_score_for_values(yearly_cost, yearly_budget, affordability_percentile, low_debt_percentile):
+    if yearly_budget > 0:
+        budget_score = budget_fit_score(yearly_cost, yearly_budget)
+        if pd.isna(budget_score):
+            return float("nan")
+        if cost_is_covered(yearly_cost, yearly_budget):
+            return 100
+        supporting_affordability = affordability_percentile if pd.notna(affordability_percentile) else 50
+        supporting_debt = low_debt_percentile if pd.notna(low_debt_percentile) else 50
+        return clamp_score(budget_score * 0.85 + supporting_affordability * 0.10 + supporting_debt * 0.05)
+
+    supporting_affordability = affordability_percentile if pd.notna(affordability_percentile) else float("nan")
+    supporting_debt = low_debt_percentile if pd.notna(low_debt_percentile) else float("nan")
+    if pd.isna(supporting_affordability) and pd.isna(supporting_debt):
+        return float("nan")
+    if pd.isna(supporting_debt):
+        return supporting_affordability
+    if pd.isna(supporting_affordability):
+        return supporting_debt
+    return supporting_affordability * 0.75 + supporting_debt * 0.25
+
+
+def debt_safety_score_for_values(estimated_debt, debt_fit, low_debt_percentile, max_debt):
+    if pd.notna(estimated_debt) and estimated_debt <= 0:
+        return 100
+    if max_debt > 0 and pd.notna(debt_fit):
+        supporting_debt = low_debt_percentile if pd.notna(low_debt_percentile) else 50
+        return clamp_score(debt_fit * 0.85 + supporting_debt * 0.15)
+    return low_debt_percentile
+
+
 def financial_survivability_score_for_values(
     yearly_cost,
     yearly_budget,
@@ -1067,12 +1112,20 @@ def financial_survivability_score_for_values(
 
     completion_component = graduation_rate * 100 if pd.notna(graduation_rate) else 55
     trust_component = confidence_score if pd.notna(confidence_score) else 55
-    raw_score = (
-        budget_score * 0.55
-        + debt_component * 0.20
-        + completion_component * 0.15
-        + trust_component * 0.10
-    )
+    if cost_is_covered(yearly_cost, yearly_budget) and pd.notna(median_debt) and median_debt <= 0:
+        raw_score = (
+            budget_score * 0.78
+            + debt_component * 0.12
+            + completion_component * 0.05
+            + trust_component * 0.05
+        )
+    else:
+        raw_score = (
+            budget_score * 0.55
+            + debt_component * 0.20
+            + completion_component * 0.15
+            + trust_component * 0.10
+        )
 
     yearly_gap = yearly_cost - yearly_budget
     if yearly_gap > max(10000, yearly_budget * 0.50):
@@ -1105,6 +1158,51 @@ def financial_survivability_summary(label):
         "Add budget": "Enter a yearly family budget to calculate survivability.",
     }
     return explanations.get(label, "Use this as a planning signal, not a final decision.")
+
+
+def profile_filter_signature(profile):
+    return tuple((key, profile.get(key)) for key in PROFILE_FILTER_SIGNATURE_KEYS)
+
+
+def reset_profile_sensitive_filters(bounds):
+    defaults = {
+        "filter_student_min": bounds["student_min"],
+        "filter_student_max": bounds["student_max"],
+        "filter_cost_min": bounds["cost_min"],
+        "filter_cost_max": bounds["cost_max"],
+        "filter_min_personalized_value": 0,
+        "filter_min_financial_survivability": 0,
+        "filter_min_major_adjusted_value": 0,
+        "filter_min_future_roi_score": 0,
+        "filter_min_current_affordability": 0,
+        "filter_min_future_roi": 0,
+        "filter_min_grad_rate": 0,
+        "filter_min_data_coverage": 0,
+        "filter_min_earnings_after_grad": 0,
+        "filter_min_earnings_10yr": 0,
+        "filter_max_median_debt": bounds["median_debt_max"],
+        "filter_min_estimated_aid_savings": 0,
+        "filter_max_cost_before_aid": bounds["cost_before_aid_max"],
+        "filter_max_yearly_over_budget": bounds["budget_gap_max"],
+        "filter_min_confidence_score": 0,
+        "filter_min_program_value": 0,
+        "filter_min_program_earnings": 0,
+        "filter_only_program_matches": False,
+    }
+    for key, value in defaults.items():
+        st.session_state[key] = value
+
+
+def reset_all_explorer_filters(bounds, ownerships, residencies):
+    st.session_state["filter_states"] = []
+    st.session_state["filter_regions"] = []
+    st.session_state["filter_degrees"] = []
+    st.session_state["filter_admissions_fits"] = []
+    reset_profile_sensitive_filters(bounds)
+    for ownership in ownerships:
+        st.session_state[f"filter_ownership_{ownership}"] = True
+    for residency in residencies:
+        st.session_state[f"filter_residency_{residency}"] = True
 
 
 def affordability_gap_penalty(data, profile):
@@ -1331,6 +1429,19 @@ def weighted_score(row, weights):
     return total / used_weight
 
 
+def weighted_available_score(row, weights):
+    total = 0
+    used_weight = 0
+    for column, weight in weights.items():
+        value = row[column]
+        if pd.notna(value) and weight > 0:
+            total += value * weight
+            used_weight += weight
+    if used_weight == 0:
+        return float("nan")
+    return total / used_weight
+
+
 def describe_score_mode(profile):
     if not profile_has_personalization(profile):
         return "Public score: using the default need-value formula."
@@ -1426,21 +1537,24 @@ def add_need_value_score(data, profile=None):
         + data["early_roi_percentile"] * 0.05
         + data["graduation_percent"] * 0.10
     )
-    if profile["annual_family_budget"] > 0:
-        data["current_affordability_score"] = (
-            data["budget_fit"] * 0.75
-            + data["affordability_percentile"] * 0.15
-            + data["low_debt_percentile"] * 0.10
-        )
-    else:
-        data["current_affordability_score"] = (
-            data["affordability_percentile"] * 0.75
-            + data["low_debt_percentile"] * 0.25
-        )
-    if profile["max_comfortable_debt"] > 0:
-        data["debt_safety_score"] = data["debt_fit"] * 0.60 + data["low_debt_percentile"] * 0.40
-    else:
-        data["debt_safety_score"] = data["low_debt_percentile"]
+    data["current_affordability_score"] = data.apply(
+        lambda row: current_affordability_score_for_values(
+            row["cost_after_aid"],
+            profile["annual_family_budget"],
+            row["affordability_percentile"],
+            row["low_debt_percentile"],
+        ),
+        axis=1,
+    )
+    data["debt_safety_score"] = data.apply(
+        lambda row: debt_safety_score_for_values(
+            row["estimated_student_debt"],
+            row["debt_fit"],
+            row["low_debt_percentile"],
+            profile["max_comfortable_debt"],
+        ),
+        axis=1,
+    )
     data["graduation_confidence_score"] = data["graduation_percent"]
     coverage_columns = [
         "cost_after_aid",
@@ -1669,12 +1783,13 @@ def program_focus_matches(program_data_updated_at, focus_query):
     programs = programs.sort_values(
         [
             "unit_id",
-            "program_match_score",
             "has_program_earnings",
+            "program_match_score",
             "has_program_debt",
+            "program_data_points",
             "awards_latest",
         ],
-        ascending=[True, False, False, False, False],
+        ascending=[True, False, False, False, False, False],
         na_position="last",
     )
     return programs.drop_duplicates("unit_id")
@@ -1752,17 +1867,34 @@ def add_program_focus(data, program_data_updated_at, profile):
     data["program_roi_percentile"] = percentile(data["program_roi_index"])
     data["program_earnings_percentile"] = percentile(data["program_earnings_1yr"])
     data["program_low_debt_percentile"] = percentile(data["program_debt"], higher_is_better=False)
-    data["program_value_score"] = (
-        data["program_roi_percentile"] * 0.55
-        + data["program_earnings_percentile"] * 0.25
-        + data["program_low_debt_percentile"] * 0.20
+    if profile["annual_family_budget"] > 0:
+        covered_program = data["cost_after_aid"].le(profile["annual_family_budget"])
+    else:
+        covered_program = pd.Series(False, index=data.index)
+    standard_program_weights = {
+        "program_roi_percentile": 0.55,
+        "program_earnings_percentile": 0.25,
+        "program_low_debt_percentile": 0.20,
+    }
+    covered_program_weights = {
+        "program_earnings_percentile": 0.70,
+        "program_roi_percentile": 0.20,
+        "program_low_debt_percentile": 0.10,
+    }
+    data["program_value_score"] = data.apply(
+        lambda row: weighted_available_score(row, standard_program_weights),
+        axis=1,
+    )
+    data.loc[covered_program, "program_value_score"] = data.loc[covered_program].apply(
+        lambda row: weighted_available_score(row, covered_program_weights),
+        axis=1,
     )
     if profile["academic_focus"]:
         data["focus_adjusted_score"] = data["need_value_score"] * 0.75
         has_program_score = data["program_value_score"].notna()
         data.loc[has_program_score, "focus_adjusted_score"] = (
-            data.loc[has_program_score, "need_value_score"] * 0.60
-            + data.loc[has_program_score, "program_value_score"] * 0.40
+            data.loc[has_program_score, "need_value_score"] * 0.45
+            + data.loc[has_program_score, "program_value_score"] * 0.55
         )
         if "affordability_gap_penalty" in data.columns:
             data["focus_adjusted_score"] = (
@@ -1924,8 +2056,8 @@ def show_college_profile(row):
         with st.expander("Why this score looks this way"):
             cols = st.columns(4)
             cols[0].metric("Future ROI", number(row["future_roi_score"]), help="Blends 10-year earnings, earnings after graduation, ROI ratio, and graduation rate.")
-            cols[1].metric("Current Affordability", number(row["current_affordability_score"]), help="Blends estimated cost after aid, budget fit, and debt.")
-            cols[2].metric("Debt Safety", number(row["debt_safety_score"]), help="Higher means lower debt and better fit with your debt comfort level.")
+            cols[1].metric("Current Affordability", number(row["current_affordability_score"]), help="If the yearly cost is covered without loans, this is treated as satisfied instead of rewarding cheaper schools.")
+            cols[2].metric("Debt Safety", number(row["debt_safety_score"]), help="If no borrowing is expected, this is treated as safe. Otherwise it uses estimated debt need and your debt comfort level.")
             cols[3].metric("Graduation Confidence", number(row["graduation_confidence_score"]), help="Based on graduation rate.")
             st.write(
                 "The personalized score does not estimate your actual financial-aid offer. "
@@ -1963,7 +2095,7 @@ def show_selected_college(data):
             f"{pct(selected_row['on_time_completion_rate'])}."
         )
         plain_markdown_text(
-            "The Personalized Value Score combines earnings, cost after aid, debt, and graduation outcomes. "
+            "The Personalized Value Score combines earnings, affordability threshold, estimated debt need, and graduation outcomes. "
             "If you filled out Personal Profile, it also adjusts around your budget, debt comfort, "
             "home state, and affordability pressure."
         )
@@ -3263,10 +3395,10 @@ def show_methodology_page():
         [
             ["Financial Survivability", "Memorable safety score: can this student realistically afford and finish this school without unsafe debt?", "0-100, higher is safer", "Yearly budget fit, debt stress, graduation rate, and estimate trust. Large budget gaps cap the score."],
             ["Personalized Value Score", "Main personalized comparison score for the entered profile.", "0-100, higher is better", "Estimated yearly cost after aid, budget fit, debt, graduation, earnings, home-state fit, and profile priorities."],
-            ["Major-Adjusted Value", "Main score when Academic focus is entered.", "0-100, higher is better", "60% Personalized Value and 40% Program Value when program data exists. Schools without matching program data receive a penalty."],
+            ["Major-Adjusted Value", "Main score when Academic focus is entered.", "0-100, higher is better", "Blends Personalized Value with Program Value. If cost is covered without loans, program earnings matter more and cheapness matters less."],
             ["Future ROI Score", "Standardized future payoff score.", "0-100, higher is better", "Percentile rank of the raw ROI Index compared with other rows. 85+ excellent, 70-84 strong, 50-69 mixed, under 50 weak."],
             ["Raw ROI Index", "Transparent formula behind ROI Score.", "ratio", "(10-year earnings / max(estimated 4-year cost after aid, $20,000)) * graduation rate."],
-            ["Program Value", "Major/focus-specific value signal when field-of-study data exists.", "0-100", "Program earnings, program ROI, and lower program debt."],
+            ["Program Value", "Major/focus-specific value signal when field-of-study data exists.", "0-100", "Program earnings, program ROI, and lower program debt. Missing program debt no longer blanks the score if earnings evidence exists."],
             ["Admissions Fit", "Admissions realism warning so students do not build a list only from reach schools.", "label", "Reported admission rate plus optional GPA, SAT/ACT, and EC profile. Ultra-selective schools stay reaches for everyone."],
             ["Budget/Value Status", "Plain-English risk category.", "label", "Combines affordability, debt, graduation, payoff, and missing-data warnings."],
             ["Decision Score", "Shortlist helper only.", "0-100", "Normally 70% data score and 30% personal fit. If the user enters an official calculator estimate, the score uses 50% data score, 30% calculator cost fit, and 20% personal fit."],
@@ -3280,7 +3412,8 @@ def show_methodology_page():
         "Financial Survivability is intentionally different from ROI. ROI asks whether the long-term payoff looks strong; "
         "Survivability asks whether the student can realistically handle the college financially now. The score is roughly "
         "55% yearly budget fit, 20% debt stress, 15% graduation probability, and 10% estimate trust. If a school is far above "
-        "the entered yearly budget, the score is capped so high earnings cannot hide an unaffordable price."
+        "the entered yearly budget, the score is capped so high earnings cannot hide an unaffordable price. If the yearly cost "
+        "is covered without loans, survivability is treated as mostly solved, so the score should be close to 100 unless data quality or completion risk is weak."
     )
 
     st.markdown("##### Data sources")
@@ -4116,10 +4249,10 @@ scenario_df = prepare_scenario_data(
     tuple(profile_settings.items()),
 )
 
-if profile_settings["annual_family_budget"] > 0:
-    sort_column = "financial_survivability_score"
-elif profile_settings["academic_focus"]:
+if profile_settings["academic_focus"]:
     sort_column = "focus_adjusted_score"
+elif profile_settings["annual_family_budget"] > 0:
+    sort_column = "financial_survivability_score"
 else:
     sort_column = "need_value_score"
 scenario_df = scenario_df.sort_values(sort_column, ascending=False, na_position="last")
@@ -4161,12 +4294,31 @@ median_debt_max = int(valid_debts.max()) if not valid_debts.empty else 0
 aid_savings_max = int(valid_aid_savings.max()) if not valid_aid_savings.empty else 0
 program_earnings_max = int(valid_program_earnings.max()) if not valid_program_earnings.empty else 0
 budget_gap_max = int(max(0, scenario_df["annual_budget_gap"].dropna().max())) if profile_settings["annual_family_budget"] > 0 else 0
+filter_bounds = {
+    "student_min": student_min,
+    "student_max": student_max,
+    "cost_min": cost_min,
+    "cost_max": cost_max,
+    "cost_before_aid_max": cost_before_aid_max,
+    "median_debt_max": median_debt_max,
+    "budget_gap_max": budget_gap_max,
+}
 
 st.session_state.setdefault("filter_states", [])
 st.session_state.setdefault("filter_regions", [])
-st.session_state.setdefault("filter_degrees", ["Bachelor"])
+st.session_state.setdefault("filter_degrees", [])
 st.session_state.setdefault("filter_admissions_fits", [])
 st.session_state.setdefault("filter_only_program_matches", False)
+if st.session_state.get("filter_defaults_version") != FILTER_DEFAULTS_VERSION:
+    reset_all_explorer_filters(filter_bounds, ownerships, residencies)
+    st.session_state["filter_defaults_version"] = FILTER_DEFAULTS_VERSION
+current_filter_signature = profile_filter_signature(profile_settings)
+previous_filter_signature = st.session_state.get("profile_filter_signature")
+if previous_filter_signature is None:
+    st.session_state["profile_filter_signature"] = current_filter_signature
+elif previous_filter_signature != current_filter_signature:
+    reset_profile_sensitive_filters(filter_bounds)
+    st.session_state["profile_filter_signature"] = current_filter_signature
 st.session_state["filter_states"] = [value for value in st.session_state["filter_states"] if value in states]
 st.session_state["filter_regions"] = [value for value in st.session_state["filter_regions"] if value in regions]
 st.session_state["filter_degrees"] = [value for value in st.session_state["filter_degrees"] if value in degrees]
@@ -4194,7 +4346,7 @@ st.session_state["filter_min_future_roi_score"] = int(max(0, min(st.session_stat
 st.session_state["filter_min_current_affordability"] = int(max(0, min(st.session_state.get("filter_min_current_affordability", 0), 100)))
 st.session_state["filter_min_future_roi"] = int(max(0, min(st.session_state.get("filter_min_future_roi", 0), 100)))
 st.session_state["filter_min_grad_rate"] = int(max(0, min(st.session_state.get("filter_min_grad_rate", 0), 100)))
-st.session_state["filter_min_data_coverage"] = int(max(0, min(st.session_state.get("filter_min_data_coverage", 80), 100)))
+st.session_state["filter_min_data_coverage"] = int(max(0, min(st.session_state.get("filter_min_data_coverage", 0), 100)))
 st.session_state["filter_min_earnings_after_grad"] = int(max(0, min(st.session_state.get("filter_min_earnings_after_grad", 0), earnings_after_grad_max)))
 st.session_state["filter_min_earnings_10yr"] = int(max(0, min(st.session_state.get("filter_min_earnings_10yr", 0), earnings_10yr_max)))
 st.session_state["filter_max_median_debt"] = int(max(0, min(st.session_state.get("filter_max_median_debt", median_debt_max), median_debt_max)))
@@ -4212,9 +4364,12 @@ for residency in residencies:
 if active_page == "Explorer":
     with st.sidebar:
         st.header("College Filters")
+        if st.button("Reset Explorer filters", width="stretch", help="Clears filters that may be hiding schools after a profile change."):
+            reset_all_explorer_filters(filter_bounds, ownerships, residencies)
+            st.rerun()
         if profile_settings["home_state"] == "Prefer not to say":
             st.caption(
-                "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate. Add a home state in Personal Profile to remove duplicate public in-state/out-of-state rows."
+            "Use these controls to narrow the table by location, school type, residency, size, cost, and graduation rate. Add a home state in Personal Profile to remove duplicate public in-state/out-of-state rows."
             )
         else:
             st.caption(
@@ -4235,7 +4390,12 @@ if active_page == "Explorer":
 
         st.multiselect("State", states, key="filter_states")
         st.multiselect("Region", regions, key="filter_regions")
-        st.multiselect("Predominant degree", degrees, key="filter_degrees")
+        st.multiselect(
+            "Predominant degree",
+            degrees,
+            key="filter_degrees",
+            help="Blank means all degree types are included. Choose Bachelor if you only want four-year college scenarios.",
+        )
         st.multiselect(
             "Admissions fit",
             available_admissions_fits,
@@ -4491,6 +4651,39 @@ max_yearly_over_budget = st.session_state["filter_max_yearly_over_budget"]
 min_confidence_score = st.session_state["filter_min_confidence_score"]
 min_program_value = st.session_state["filter_min_program_value"]
 min_program_earnings = st.session_state["filter_min_program_earnings"]
+active_filter_notes = []
+if selected_states:
+    active_filter_notes.append(f"state: {', '.join(selected_states)}")
+if selected_regions:
+    active_filter_notes.append(f"region: {', '.join(selected_regions)}")
+if selected_admissions_fits:
+    active_filter_notes.append(f"admissions fit: {', '.join(selected_admissions_fits)}")
+if selected_degrees:
+    active_filter_notes.append(f"degree: {', '.join(selected_degrees)}")
+if len(selected_ownerships) < len(ownerships):
+    active_filter_notes.append("ownership")
+if selected_residencies:
+    active_filter_notes.append("residency")
+if selected_student_range != (student_min, student_max):
+    active_filter_notes.append(f"student size {selected_student_range[0]:,}-{selected_student_range[1]:,}")
+if selected_cost_range != (cost_min, cost_max):
+    active_filter_notes.append(f"after-aid cost {money(selected_cost_range[0])}-{money(selected_cost_range[1])}")
+if min_financial_survivability > 0:
+    active_filter_notes.append(f"survivability >= {min_financial_survivability}")
+if min_major_adjusted_value > 0 and profile_settings["academic_focus"]:
+    active_filter_notes.append(f"major-adjusted >= {min_major_adjusted_value}")
+if min_personalized_value > 0 and not profile_settings["academic_focus"]:
+    active_filter_notes.append(f"personalized value >= {min_personalized_value}")
+if min_data_coverage > 0:
+    active_filter_notes.append(f"data coverage >= {min_data_coverage}%")
+if min_grad_rate > 0:
+    active_filter_notes.append(f"grad rate >= {min_grad_rate}%")
+if max_median_debt < median_debt_max:
+    active_filter_notes.append(f"debt need <= {money(max_median_debt)}")
+if max_yearly_over_budget < budget_gap_max and profile_settings["annual_family_budget"] > 0:
+    active_filter_notes.append(f"over-budget <= {money(max_yearly_over_budget)}")
+if only_program_matches:
+    active_filter_notes.append("matching program data only")
 
 filtered = scenario_df.copy()
 filtered["estimated_aid_savings"] = (filtered["cost_before_aid"] - filtered["cost_after_aid"]).clip(lower=0)
@@ -4511,15 +4704,22 @@ if only_program_matches:
 filtered = filtered[
     filtered["student_size"].between(selected_student_range[0], selected_student_range[1])
     & filtered["cost_after_aid"].between(selected_cost_range[0], selected_cost_range[1])
-    & (filtered["financial_survivability_score"] >= min_financial_survivability)
-    & (filtered["roi_score"] >= min_future_roi_score)
-    & (filtered["current_affordability_score"] >= min_current_affordability)
-    & (filtered["future_roi_score"] >= min_future_roi)
-    & (filtered["graduation_rate"] >= min_grad_rate / 100)
-    & (filtered["data_coverage"] >= min_data_coverage)
-    & (filtered["estimate_confidence_score"] >= min_confidence_score)
 ]
-if not profile_settings["academic_focus"]:
+if min_financial_survivability > 0:
+    filtered = filtered[filtered["financial_survivability_score"] >= min_financial_survivability]
+if min_future_roi_score > 0:
+    filtered = filtered[filtered["roi_score"] >= min_future_roi_score]
+if min_current_affordability > 0:
+    filtered = filtered[filtered["current_affordability_score"] >= min_current_affordability]
+if min_future_roi > 0:
+    filtered = filtered[filtered["future_roi_score"] >= min_future_roi]
+if min_grad_rate > 0:
+    filtered = filtered[filtered["graduation_rate"] >= min_grad_rate / 100]
+if min_data_coverage > 0:
+    filtered = filtered[filtered["data_coverage"] >= min_data_coverage]
+if min_confidence_score > 0:
+    filtered = filtered[filtered["estimate_confidence_score"] >= min_confidence_score]
+if min_personalized_value > 0 and not profile_settings["academic_focus"]:
     filtered = filtered[filtered["need_value_score"] >= min_personalized_value]
 if max_cost_before_aid < cost_before_aid_max:
     filtered = filtered[filtered["cost_before_aid"] <= max_cost_before_aid]
@@ -4562,6 +4762,10 @@ if active_page == "Explorer":
         signal_counts = filtered["risk_label"].value_counts().head(3)
         signal_text = " | ".join(f"{label}: {count:,}" for label, count in signal_counts.items())
         st.caption(f"Most common financial signals in this view: {signal_text}")
+    if active_filter_notes:
+        st.caption(f"Active filters: {' | '.join(active_filter_notes[:8])}")
+        if len(active_filter_notes) > 8:
+            st.caption(f"Plus {len(active_filter_notes) - 8} more active filter(s). Use Reset Explorer filters if expected schools are missing.")
 
     plain_caption(
         f"Median yearly estimated cost after aid for this filtered view: {money(filtered['cost_after_aid'].median())}. "
@@ -4576,7 +4780,7 @@ if active_page == "Personal Profile":
 elif active_page == "Explorer":
     st.subheader("College ROI Explorer")
     st.caption(
-        "Sorted by the clearest value score for your profile. If you entered a yearly budget, the table prioritizes Financial Survivability. Without a budget, it uses Major-Adjusted Value when a focus is entered, otherwise Personalized Value Score."
+        "Sorted by the clearest value score for your profile. If you enter an Academic focus, the table sorts by Major-Adjusted Value. Otherwise, it uses Financial Survivability when a yearly budget is entered, and Personalized Value Score when no budget is entered."
     )
     st.info(
         "Quick read: earnings are reported snapshots, not lifetime earnings. Future ROI uses school-wide early and 10-year earnings. "
@@ -4599,7 +4803,11 @@ elif active_page == "Explorer":
             st.caption(f"Showing {len(table_view)} search match(es) inside the table.")
 
     if table_view.empty:
-        st.info("No colleges match the current filters. Try widening the cost, size, or graduation-rate range.")
+        st.info("No colleges match the current filters. Use Reset Explorer filters in the sidebar, then add filters back one at a time.")
+    elif len(filtered) < len(scenario_df) * 0.25 and active_filter_notes:
+        st.info(
+            "Some schools may be hidden by active filters. If places like Harvard, Cornell, MIT, or Carnegie Mellon are missing, use Reset Explorer filters in the sidebar first."
+        )
     else:
         st.caption("Click a row to open College Details below. Use the list control under the table to add schools.")
         if not profile_has_personalization(profile_settings):
