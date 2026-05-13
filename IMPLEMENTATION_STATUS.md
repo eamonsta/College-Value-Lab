@@ -1,6 +1,6 @@
 # College Value Lab Implementation Status
 
-Last updated: May 11, 2026
+Last updated: May 12, 2026
 
 This file is the handoff checklist for making sure the end-goal plan is actually implemented, not just discussed.
 
@@ -11,12 +11,12 @@ This file is the handoff checklist for making sure the end-goal plan is actually
 - College Explorer with filters for state, region, ownership, residency, school size, cost, graduation rate, data coverage, and admissions fit.
 - Personalized scoring:
   - Financial Survivability
-  - Need Value Score
+  - Personalized Value Score
   - Major-Adjusted Value
   - Future ROI Score
   - Admissions Fit
   - Merit Aid Signal when optional merit data is available
-- College detail view with cost, earnings, debt, graduation, admissions, merit-aid, program-outcome, and official calculator context.
+- College detail view with cost, earnings, Estimated Debt Need, typical median debt, graduation, admissions, merit-aid, program-outcome, and official calculator context.
 - Selected Schools workflow:
   - status
   - personal fit
@@ -27,6 +27,7 @@ This file is the handoff checklist for making sure the end-goal plan is actually
   - CSV download
   - counselor/family summary download
   - restorable JSON export/import
+  - full progress JSON export/import for profile, filters, and selected schools
 - Validation Lab:
   - 5-10 school worksheet
   - official calculator result input
@@ -72,6 +73,9 @@ This file is the handoff checklist for making sure the end-goal plan is actually
 - Git working tree was clean after the latest implementation pass.
 - Program data now lazy-loads only when an academic focus is entered, improving Streamlit Cloud startup behavior.
 - Selected schools can be exported as restorable JSON and imported back into the app.
+- Full progress JSON restores profile inputs, Explorer filters, and selected schools.
+- Major-Adjusted Value replaces generic Personalized Value in the default Explorer view when a focus/major is entered.
+- Estimated Debt Need adjusts when the user's non-loan budget or official calculator estimate covers part/all of the cost.
 
 ## Manual Steps Still Required
 
@@ -95,7 +99,7 @@ python3 scripts/fetch_merit_aid_college_transitions.py
 
 ## Immediate Next Checklist
 
-1. Push origin in GitHub Desktop.
+1. Push origin in GitHub Desktop or with `git push origin main`.
 2. Open the Streamlit Cloud app and confirm it loads.
 3. Go through this exact flow:
    - Personal Profile
@@ -103,10 +107,10 @@ python3 scripts/fetch_merit_aid_college_transitions.py
    - Add 3-5 schools
    - Selected Schools
    - Enter one official calculator estimate
-   - Export restorable shortlist JSON
-   - Re-import that JSON
+   - Export full progress JSON
+   - Re-import that JSON from Personal Profile
 4. If Streamlit Cloud fails, open Manage app -> Logs and fix the first red error.
-5. Start validation with Princeton, Stanford, University of Michigan, UCLA, Georgia Tech, Michigan State, CUNY Baruch, and University of Florida.
+5. Start validation with Princeton, University of Michigan, UCLA, Georgia Tech, and Michigan State.
 
 ## Resume Framing
 

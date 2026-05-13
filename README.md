@@ -1,6 +1,6 @@
 # College Value Lab
 
-College Value Lab is a public-data college affordability planner. It helps students compare whether colleges are financially realistic, risky, or worth stretching for by combining estimated cost after aid, budget gap, student debt, graduation outcomes, and post-college earnings.
+College Value Lab is a public-data college affordability planner. It helps students compare whether colleges are financially realistic, risky, or worth stretching for by combining estimated cost after aid, non-loan budget fit, estimated debt need, graduation outcomes, major outcomes, admissions realism, and post-college earnings.
 
 ## Data Source
 
@@ -62,11 +62,16 @@ python3 scripts/fetch_net_price_calculator_urls.py
 streamlit run app/college_value_lab.py
 ```
 
-## Need Value Score
+## Personalized Value And Major-Adjusted Value
 
 The app first estimates yearly cost after aid. If a user enters a family income range, the app uses College Scorecard net price by income bracket when available; otherwise it falls back to average net price. Public colleges may appear as separate in-state and out-of-state scenarios.
 
-Need Value Score combines five components:
+The app uses two main comparison scores:
+
+- Personalized Value Score when no academic focus is entered.
+- Major-Adjusted Value when a user enters an academic focus or major.
+
+Personalized Value combines five components:
 
 - Current affordability: estimated cost after aid, budget fit, and debt pressure.
 - Future ROI / earnings: 10-year earnings, earnings after graduation, ROI ratio, and graduation rate.
@@ -74,7 +79,7 @@ Need Value Score combines five components:
 - Graduation confidence.
 - Home-state fit.
 
-The Personal Profile page lets users adjust how much each component matters. This makes the score useful for different situations: one student may need current affordability above all else, while another may care more about long-term payoff. This is an exploratory planning score, not a financial-aid estimator or a guarantee of individual outcomes.
+Major-Adjusted Value becomes the main score when a focus is entered. It blends the personalized score with program-level earnings and debt when public field-of-study data is available. The Personal Profile page lets users adjust how much each component matters. This makes the score useful for different situations: one student may need current affordability above all else, while another may care more about long-term payoff. These are exploratory planning scores, not financial-aid estimators or guarantees of individual outcomes.
 
 The raw future ROI ratio is:
 
@@ -104,7 +109,7 @@ The app adds plain-English labels so students do not have to interpret every num
 - Completion risk.
 - Data limited - verify manually.
 
-The app also calculates a yearly budget gap and a debt-to-early-earnings ratio. These are meant to make the tradeoff more concrete: can the student afford the college now, and does the typical debt look reasonable compared with early career earnings?
+The app also calculates a yearly budget gap, Estimated Debt Need, and a debt-to-early-earnings ratio. Estimated Debt Need uses the yearly amount covered without loans from Personal Profile: uncovered yearly cost multiplied by four. If no non-loan budget is entered, it falls back to the college's typical median debt. These numbers make the tradeoff more concrete: can the student afford the college now, and does the likely borrowing need look reasonable compared with early career earnings?
 
 ## Net Price Calculator Companion
 
@@ -116,13 +121,13 @@ Estimate Confidence shows how much public evidence supports the app's estimate. 
 
 - Searchable college explorer with filters for state, region, ownership, residency, size, estimated cost, graduation rate, and data coverage.
 - Income-bracket cost estimates for need-based aid when Scorecard data is available.
-- Personalized Need Value Score with profile presets.
+- Personalized Value Score and Major-Adjusted Value with profile presets.
 - Plain-English financial signals, budget-gap estimates, and debt-to-earnings warnings.
 - Estimate confidence and official net price calculator links.
 - Optional program-level outcomes by academic focus using College Scorecard field-of-study records.
 - Optional merit-aid opportunity signals from Common Data Set-derived public tables.
 - Dedicated methodology page explaining scores, data sources, and limitations.
-- Selected Schools tracker with application status, personal fit rating, notes, shortlist comparison, decision score, and CSV/JSON export.
+- Selected Schools tracker with application status, personal fit rating, official calculator override, notes, shortlist comparison, decision score, and CSV/JSON export.
 - Data coverage indicators so missing public data is visible.
 
 ## Competition / Beta Package
@@ -137,8 +142,8 @@ The project includes supporting materials for a public beta and Congressional Ap
 
 ## Next Features
 
-- Finish 5-10 official calculator validation examples.
-- Run real user testing with 10-20 students, parents, teachers, or counselors.
+- This week: verify Streamlit Cloud, run one full smoke test, start 3-5 official calculator validation examples, and test with 5-10 users.
+- Before competition/resume use: finish 5-10 official calculator validation examples and test with 10-20 students, parents, teachers, or counselors.
 - Add persistent user accounts and saved school lists in a future full web app.
 - Rebuild the product with Next.js, Supabase Auth, Supabase Postgres, and Vercel when moving beyond Streamlit.
 - See `PRODUCT_MIGRATION_PLAN.md` for the full database/authentication roadmap.

@@ -12,12 +12,12 @@ Start on Personal Profile. Enter:
 
 - Home state
 - Family income range
-- Yearly amount the family can actually pay
+- Yearly amount covered without loans
 - Maximum comfortable debt
 - Academic focus
 - Optional GPA, SAT/ACT, and extracurricular estimate
 
-Say: These inputs do not predict the future. They personalize the comparison around affordability, debt comfort, major interest, and admissions realism.
+Say: These inputs do not predict the future. They personalize the comparison around aid assumptions, affordability, estimated borrowing need, debt comfort, major interest, and admissions realism.
 
 ## 0:35-1:05 - Explorer
 
@@ -26,8 +26,9 @@ Move to Explorer. Show:
 - Search
 - Filters for state, region, ownership, cost, graduation rate, and admissions fit
 - Financial Survivability
-- Need Value or Major-Adjusted Value
+- Personalized Value, or Major-Adjusted Value when a major/focus is entered
 - Estimated yearly cost after aid
+- Estimated Debt Need
 - Admissions Fit
 
 Say: The app separates financial fit from admissions realism so a student does not accidentally build a list only from reach schools.
@@ -40,7 +41,7 @@ Click one school. Show:
 - Earnings after graduation
 - Earnings 10 years later
 - Graduation rate
-- Debt
+- Estimated Debt Need and typical median debt
 - Merit Aid Signal if available
 - Official calculator link
 
@@ -53,9 +54,11 @@ Add 3-5 schools. Show:
 - Status
 - Personal Fit
 - Official calculator estimate input
+- Updated yearly cost used for decisions
+- Updated estimated debt need
 - Shortlist health warnings
 - Balanced list guidance
-- Export/restorable shortlist JSON
+- Export/restorable full progress JSON
 
 Say: This turns the project from a ranking dashboard into a decision workflow.
 

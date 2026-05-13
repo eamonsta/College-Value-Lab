@@ -2325,12 +2325,12 @@ def show_what_if_simulator(selected_table, profile):
         )
         col1, col2, col3 = st.columns(3)
         temp_budget = col1.number_input(
-            "Temporary yearly family budget",
+            "Temporary yearly amount covered without loans",
             min_value=0,
             max_value=150000,
             value=int(profile["annual_family_budget"]),
             step=1000,
-            help="Try a different yearly amount your family can pay without changing Personal Profile.",
+            help="Try a different yearly amount covered by family support, savings, scholarships, or other non-loan money without changing Personal Profile.",
         )
         extra_scholarship = col2.number_input(
             "Extra yearly grant/scholarship",
@@ -2356,12 +2356,16 @@ def show_what_if_simulator(selected_table, profile):
         sim["Simulated Yearly Over/Under Budget"] = sim["Simulated Yearly Cost"] - temp_budget
         if temp_budget <= 0:
             sim["Simulated Yearly Over/Under Budget"] = None
+        sim["Simulated Estimated Debt Need"] = sim.apply(
+            lambda row: estimated_debt_need(row["Simulated Yearly Cost"], temp_budget, row.get("Median Debt")),
+            axis=1,
+        )
         sim["Simulated Survivability"] = sim.apply(
             lambda row: financial_survivability_score_for_values(
                 row["Simulated Yearly Cost"],
                 temp_budget,
                 temp_debt_limit,
-                row.get("Median Debt"),
+                row.get("Simulated Estimated Debt Need"),
                 row.get("Earnings After Grad"),
                 row.get("Graduation Rate"),
                 row.get("Estimate Trust Score"),
@@ -2379,6 +2383,7 @@ def show_what_if_simulator(selected_table, profile):
                     "Simulated Survivability",
                     "Simulated Yearly Cost",
                     "Simulated Yearly Over/Under Budget",
+                    "Simulated Estimated Debt Need",
                     "Cost Used In Decision",
                 ]
             ],
@@ -2394,6 +2399,7 @@ def show_what_if_simulator(selected_table, profile):
                 ),
                 "Simulated Yearly Cost": st.column_config.NumberColumn(format="$%d"),
                 "Simulated Yearly Over/Under Budget": st.column_config.NumberColumn(format="$%d"),
+                "Simulated Estimated Debt Need": st.column_config.NumberColumn(format="$%d", help=TOOLTIPS["estimated_student_debt"]),
                 "Cost Used In Decision": st.column_config.NumberColumn(
                     "Original Yearly Cost Used",
                     format="$%d",

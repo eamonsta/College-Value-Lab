@@ -6,7 +6,7 @@ Working deadline: October 26, 2026 at 8:00 PM ET
 
 ## One-Sentence Pitch
 
-College Value Lab helps students build a financially realistic college list by combining public outcome data, family budget constraints, admissions realism, merit-aid signals, major outcomes, and official net price calculator results.
+College Value Lab helps students build a financially realistic college list by combining public outcome data, non-loan budget constraints, estimated borrowing need, admissions realism, merit-aid signals, major outcomes, and official net price calculator results.
 
 ## Problem
 
@@ -28,6 +28,7 @@ The app is especially useful for students who need to think carefully about aid,
 
 - Lets users enter a financial and academic profile.
 - Estimates yearly cost after aid using public College Scorecard data.
+- Estimates Debt Need from the uncovered yearly cost after the user's non-loan budget.
 - Separates current affordability from long-term ROI.
 - Shows major/program-level earnings and debt when available.
 - Adds admissions realism labels so a student does not build a list only from reach schools.
@@ -47,8 +48,8 @@ The app is especially useful for students who need to think carefully about aid,
 College Value Lab uses several transparent planning signals:
 
 - Financial Survivability: asks whether the student can realistically afford and finish the school without unsafe debt.
-- Need Value Score: combines affordability, budget fit, debt, graduation, earnings, and home-state fit.
-- Major-Adjusted Value: adjusts Need Value using program-level earnings and debt when the user enters an academic focus.
+- Personalized Value Score: combines affordability, budget fit, estimated debt need, graduation, earnings, and home-state fit.
+- Major-Adjusted Value: becomes the main score when the user enters an academic focus, adjusting Personalized Value using program-level earnings and debt.
 - Future ROI Score: standardizes long-term payoff relative to other schools in the dataset.
 - Admissions Fit: a conservative realism label using reported admission rate plus optional GPA, SAT/ACT, and extracurricular strength.
 
@@ -58,7 +59,7 @@ The app does not claim to predict exact financial-aid offers, scholarships, admi
 
 - Data fetching and cleaning scripts for public college outcome data.
 - Streamlit app with profile inputs, filters, searchable explorer, selected-school workflow, validation worksheet, and methodology pages.
-- Personalized scoring model for affordability, ROI, debt, graduation, and admissions realism.
+- Personalized scoring model for affordability, ROI, estimated debt need, graduation, major outcomes, and admissions realism.
 - Shortlist health warnings and official calculator override workflow.
 - Documentation, persona audit, migration roadmap, and competition package.
 

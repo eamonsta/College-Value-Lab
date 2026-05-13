@@ -8,11 +8,13 @@ Ask each tester to complete the same flow:
 
 1. Enter a personal profile.
 2. Search for at least one college they know.
-3. Add 3-5 schools to Selected Schools.
-4. Read the shortlist health warnings.
-5. Open at least one official net price calculator.
-6. Enter one official calculator estimate.
-7. Explain what they think Financial Survivability, Need Value, and Admissions Fit mean.
+3. Apply at least one score filter and one location/type filter in Explorer.
+4. Add 3-5 schools to Selected Schools.
+5. Read the shortlist health warnings.
+6. Open at least one official net price calculator.
+7. Enter one yearly official calculator estimate.
+8. Export the full progress JSON.
+9. Explain what they think Financial Survivability, Major-Adjusted Value or Personalized Value, Estimated Debt Need, and Admissions Fit mean.
 
 ## Tester Log Template
 
@@ -32,20 +34,23 @@ Ask each tester to complete the same flow:
 ## Questions To Ask
 
 - What did you think Financial Survivability meant?
-- Did Need Value feel different from Future ROI?
+- Did Personalized Value or Major-Adjusted Value feel different from Future ROI?
+- Did Estimated Debt Need make sense after entering a yearly amount covered without loans?
 - Did Admissions Fit feel like a warning label or like a fake prediction?
 - Which number did you trust least?
 - Did you understand why the official calculator step matters?
 - Could you tell which fields you were allowed to edit in Selected Schools?
+- Could you tell how to save your profile and selected schools?
 - Would this change which colleges you research?
 - What did you expect to find but could not?
 
 ## Post-Test Summary
 
-After 10-20 tests, summarize:
+This week, summarize after 5-10 tests. Before competition/resume use, expand to 10-20 tests.
 
 - Top 3 repeated confusions.
 - Top 3 most useful features.
 - Top 3 features people expected but did not find.
+- Slowest screen or action.
 - Changes made because of user feedback.
 - Changes intentionally not made, with reasons.
